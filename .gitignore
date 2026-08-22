@@ -6,3 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# AI agent coordination files
+.agents/
+
+# Audit reports (internal only)
+audit_report.md
+
+# Test files
+src/*.test.ts
