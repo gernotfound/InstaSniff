@@ -1,154 +1,183 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import { Header } from './components/Header';
+import { Footer } from './components/Footer';
 import { InputCard } from './components/InputCard';
-import { parseInstagramText } from './utils';
-import { Link as LinkIcon, RefreshCcw, Search, ExternalLink } from 'lucide-react';
+import { ResultsView } from './components/ResultsView';
+import { StatsCard } from './components/StatsCard';
+import { AlertBanner, AlertMessage } from './components/AlertBanner';
+import { parseInstagramText, computeAnalysis, AnalysisStats } from './utils';
+import { Search, Loader2 } from 'lucide-react';
 
 export default function App() {
   const [followers, setFollowers] = useState('');
   const [following, setFollowing] = useState('');
-  const [unfollowers, setUnfollowers] = useState<string[] | null>(null);
-  const [showLinks, setShowLinks] = useState(false);
+  const [stats, setStats] = useState<AnalysisStats | null>(null);
+  const [alert, setAlert] = useState<AlertMessage | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const resultsRef = useRef<HTMLDivElement>(null);
+
+  // Invalidate previous analysis when user edits input text
+  const handleFollowersChange = (val: string) => {
+    setFollowers(val);
+    if (stats) setStats(null);
+    if (alert) setAlert(null);
+  };
+
+  const handleFollowingChange = (val: string) => {
+    setFollowing(val);
+    if (stats) setStats(null);
+    if (alert) setAlert(null);
+  };
 
   const handleProcess = () => {
-    if (!followers.trim() || !following.trim()) {
-      alert("Inserisci entrambe le liste (Follower e Seguiti) per continuare.");
+    setAlert(null);
+
+    const rawFollowers = followers.trim();
+    const rawFollowing = following.trim();
+
+    if (!rawFollowers || !rawFollowing) {
+      setAlert({
+        type: 'warning',
+        title: 'Dati mancanti',
+        message: 'Inserisci o carica entrambe le liste (I tuoi Follower e Chi Segui) per avviare il confronto.',
+      });
       return;
     }
 
-    const followersSet = new Set(parseInstagramText(followers));
-    const followingSet = new Set(parseInstagramText(following));
+    setIsProcessing(true);
 
-    // Trova le persone che tu segui (followingSet), ma che non sono nei tuoi follower (followersSet)
-    const notFollowingBack = Array.from(followingSet).filter(
-      (user) => !followersSet.has(user)
-    );
+    // Use requestAnimationFrame / timeout to prevent main-thread freezing on heavy exports
+    setTimeout(() => {
+      try {
+        const followersList = parseInstagramText(rawFollowers);
+        const followingList = parseInstagramText(rawFollowing);
 
-    setUnfollowers(notFollowingBack);
+        if (followersList.length === 0 && followingList.length === 0) {
+          setAlert({
+            type: 'error',
+            title: 'Nessun account rilevato',
+            message:
+              'Impossibile estrarre account Instagram validi da entrambe le liste. Assicurati di aver incollato username, URL o file di esportazione ufficiali (JSON/HTML/CSV).',
+          });
+          setStats(null);
+          setIsProcessing(false);
+          return;
+        }
+
+        if (followersList.length === 0) {
+          setAlert({
+            type: 'error',
+            title: 'Lista Follower non valida',
+            message:
+              'Non è stato trovato alcun account valido nella lista dei tuoi Follower. Controlla il formato dei dati incollati.',
+          });
+          setStats(null);
+          setIsProcessing(false);
+          return;
+        }
+
+        if (followingList.length === 0) {
+          setAlert({
+            type: 'error',
+            title: 'Lista Seguiti non valida',
+            message:
+              'Non è stato trovato alcun account valido nella lista delle persone che Segui. Controlla il formato dei dati incollati.',
+          });
+          setStats(null);
+          setIsProcessing(false);
+          return;
+        }
+
+        const calculatedStats = computeAnalysis(followingList, followersList);
+        setStats(calculatedStats);
+        setAlert(null);
+
+        // Smooth scroll to results on mobile/tablet viewports
+        if (window.innerWidth < 1024 && resultsRef.current) {
+          resultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      } catch (err) {
+        setAlert({
+          type: 'error',
+          title: 'Errore durante l\'elaborazione',
+          message: err instanceof Error ? err.message : 'Si è verificato un errore sconosciuto.',
+        });
+      } finally {
+        setIsProcessing(false);
+      }
+    }, 50);
   };
 
   const handleReset = () => {
     setFollowers('');
     setFollowing('');
-    setUnfollowers(null);
-    setShowLinks(false);
+    setStats(null);
+    setAlert(null);
   };
 
+  const isFormIncomplete = !followers.trim() || !following.trim();
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans p-4 md:p-8 flex flex-col gap-6 overflow-x-hidden">
-      <header className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800 pb-4 gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">
-            Insta<span className="text-indigo-500">Sniff</span>
-          </h1>
-          <p className="text-slate-400 text-sm mt-1 max-w-xl">
-            Scopri chi non ricambia il follow su Instagram. Incolla le liste esportate: il sistema pulirà le date in automatico estraendo solo i nomi utente.
-          </p>
-        </div>
-        <div className="flex gap-3">
-          <div className="flex items-center gap-2 bg-slate-900 px-4 py-2 rounded-lg border border-slate-800">
-            <div className="w-2 h-2 rounded-full bg-green-500"></div>
-            <span className="text-xs font-mono uppercase tracking-widest text-slate-300">Live Parser Active</span>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans p-4 sm:p-6 md:p-8 flex flex-col gap-6">
+      <Header isAnalyzed={stats !== null} />
 
-      <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-grow">
-        {/* Input Section - Left Side */}
-        <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-2 gap-4 h-fit">
-          <InputCard
-            title="I tuoi Follower"
-            description="Lista o file esportato di chi ti segue."
-            value={followers}
-            onChange={setFollowers}
-            placeholder="Es.&#10;podstract&#10;ago 18, 2026 6:14 am&#10;alberto_barnus99&#10;..."
-          />
-          <InputCard
-            title="Chi Segui"
-            description="Lista o file esportato delle persone che segui."
-            value={following}
-            onChange={setFollowing}
-            placeholder="Es.&#10;intreccidisogni_&#10;giu 30, 2026 2:12 pm&#10;..."
-          />
-          
-          {/* Action Row */}
-          <div className="md:col-span-2">
-            <button
-              onClick={handleProcess}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-4 rounded-2xl text-sm font-bold tracking-wide flex items-center justify-center gap-2 transition-all uppercase shadow-lg shadow-indigo-500/10 border border-indigo-500/20"
-            >
-              <Search size={18} />
-              Trova chi non ti segue
-            </button>
-          </div>
-        </div>
+      <AlertBanner alert={alert} onDismiss={() => setAlert(null)} />
 
-        {/* Results Section - Right Side */}
-        <section className="lg:col-span-4 bg-slate-900 rounded-2xl border border-indigo-500/30 p-6 flex flex-col gap-4 shadow-xl shadow-indigo-500/5 lg:min-h-[500px]">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-white">Risultati {unfollowers && `(${unfollowers.length})`}</h3>
-            <div className="flex gap-2">
-              <button 
-                onClick={handleReset} 
-                className="bg-slate-800 p-1.5 rounded-lg text-slate-400 hover:text-white transition-colors"
-                title="Ricomincia"
-              >
-                <RefreshCcw size={16} />
-              </button>
-            </div>
+      {stats && <StatsCard stats={stats} />}
+
+      <main className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-grow">
+        {/* Left Side: Input Section & Action Button */}
+        <div className="lg:col-span-7 flex flex-col gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <InputCard
+              title="I tuoi Follower"
+              description="Lista o file esportato degli account che ti seguono."
+              value={followers}
+              onChange={handleFollowersChange}
+              placeholder="Es.&#10;@alberto_barnus99&#10;https://instagram.com/podstract&#10;mario_rossi&#10;..."
+            />
+
+            <InputCard
+              title="Chi Segui"
+              description="Lista o file esportato degli account che segui."
+              value={following}
+              onChange={handleFollowingChange}
+              placeholder="Es.&#10;@cristiano&#10;intreccidisogni_&#10;https://instagram.com/user&#10;..."
+            />
           </div>
 
-          <div className="flex-grow overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-            {!unfollowers ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 text-sm font-mono text-center">
-                <span className="mb-3 opacity-50"><Search size={32} /></span>
-                In attesa dei dati...<br/>Incolla le liste e avvia la ricerca.
-              </div>
-            ) : unfollowers.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-green-500 text-sm font-mono text-center px-4">
-                Grande! Tutti quelli che segui ti seguono a loro volta. 🎉
-              </div>
+          <button
+            type="button"
+            onClick={handleProcess}
+            disabled={isFormIncomplete || isProcessing}
+            className={`w-full py-4 px-6 rounded-2xl text-sm font-bold tracking-wide flex items-center justify-center gap-2 transition-all uppercase shadow-lg border cursor-pointer focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none ${
+              isFormIncomplete || isProcessing
+                ? 'bg-slate-800 text-slate-500 border-slate-700/50 cursor-not-allowed shadow-none'
+                : 'bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 active:scale-[0.99] text-white border-indigo-500/30 shadow-indigo-600/20'
+            }`}
+            aria-label="Avvia scansione e trova chi non ricambia il follow"
+          >
+            {isProcessing ? (
+              <>
+                <Loader2 size={18} className="animate-spin" />
+                Elaborazione in corso...
+              </>
             ) : (
-              unfollowers.map(user => (
-                <div key={user} className="group flex items-center justify-between bg-slate-950/50 p-3 rounded-xl border border-slate-800 hover:border-indigo-500/50 transition-colors">
-                  <div className="flex flex-col overflow-hidden mr-2">
-                    <span className="text-sm font-mono text-slate-200 truncate" title={`@${user}`}>@{user}</span>
-                  </div>
-                  {showLinks ? (
-                    <a 
-                      href={`https://instagram.com/${user}`} 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="text-[10px] text-indigo-400 font-bold hover:underline transition-opacity shrink-0 flex items-center gap-1"
-                      title="Apri su Instagram"
-                    >
-                      PROFILO <ExternalLink size={10} />
-                    </a>
-                  ) : (
-                    <span className="text-[10px] text-slate-500 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      Unfollower
-                    </span>
-                  )}
-                </div>
-              ))
+              <>
+                <Search size={18} />
+                Trova chi non ti segue
+              </>
             )}
-          </div>
+          </button>
+        </div>
 
-          {unfollowers && unfollowers.length > 0 && (
-            <button 
-              onClick={() => setShowLinks(!showLinks)}
-              className="bg-indigo-600 p-3 rounded-xl text-center cursor-pointer hover:bg-indigo-500 transition-all text-white border border-indigo-500/20 shadow-md flex justify-center items-center gap-2 mt-auto"
-            >
-              <LinkIcon size={16} />
-              <span className="text-sm font-bold tracking-wider">{showLinks ? "MOSTRA SOLO NOMI" : "CREA LINK AI PROFILI"}</span>
-            </button>
-          )}
-        </section>
+        {/* Right Side: Results Section */}
+        <div ref={resultsRef} className="lg:col-span-5 flex flex-col min-h-0">
+          <ResultsView stats={stats} onReset={handleReset} />
+        </div>
       </main>
-      
-      <footer className="flex flex-col sm:flex-row justify-between items-center text-[10px] text-slate-600 border-t border-slate-800 pt-4 font-mono gap-2">
-        <div>SOURCE: LOCAL_STORAGE / REPO: GITHUB_UI</div>
-        <div>SYSTEM_STATUS: {unfollowers ? 'ANALYSIS_COMPLETE' : 'READY_TO_PARSE'}</div>
-      </footer>
+
+      <Footer isAnalyzed={stats !== null} />
     </div>
   );
 }
