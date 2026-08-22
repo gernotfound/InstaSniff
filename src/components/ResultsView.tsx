@@ -28,9 +28,10 @@ export type SortOrder = 'default' | 'asc' | 'desc';
 interface ResultsViewProps {
   stats: AnalysisStats | null;
   onReset: () => void;
+  showAsLinks?: boolean;
 }
 
-export function ResultsView({ stats, onReset }: ResultsViewProps) {
+export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsViewProps) {
   const [activeTab, setActiveTab] = useState<ActiveTab>('unfollowers');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState<SortOrder>('default');
@@ -70,7 +71,9 @@ export function ResultsView({ stats, onReset }: ResultsViewProps) {
 
   const handleCopyList = async () => {
     if (activeList.length === 0) return;
-    const text = activeList.join('\n');
+    const text = showAsLinks 
+      ? activeList.map(u => `https://www.instagram.com/${u}`).join('\n')
+      : activeList.join('\n');
     const success = await copyToClipboard(text);
     if (success) {
       setCopyFeedback(true);
@@ -309,9 +312,9 @@ export function ResultsView({ stats, onReset }: ResultsViewProps) {
                     <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0"></span>
                     <span
                       className="text-xs font-mono font-medium text-slate-200 truncate"
-                      title={`@${user}`}
+                      title={showAsLinks ? `https://www.instagram.com/${user}` : `@${user}`}
                     >
-                      @{user}
+                      {showAsLinks ? `https://www.instagram.com/${user}` : `@${user}`}
                     </span>
                   </div>
 

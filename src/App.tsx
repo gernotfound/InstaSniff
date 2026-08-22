@@ -14,6 +14,7 @@ export default function App() {
   const [stats, setStats] = useState<AnalysisStats | null>(null);
   const [alert, setAlert] = useState<AlertMessage | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showAsLinks, setShowAsLinks] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
 
   // Invalidate previous analysis when user edits input text
@@ -134,7 +135,6 @@ export default function App() {
               description="Lista o file esportato degli account che ti seguono."
               value={followers}
               onChange={handleFollowersChange}
-              placeholder="Es.&#10;@alberto_barnus99&#10;https://instagram.com/podstract&#10;mario_rossi&#10;..."
             />
 
             <InputCard
@@ -142,8 +142,8 @@ export default function App() {
               description="Lista o file esportato degli account che segui."
               value={following}
               onChange={handleFollowingChange}
-              placeholder="Es.&#10;@cristiano&#10;intreccidisogni_&#10;https://instagram.com/user&#10;..."
             />
+
           </div>
 
           <button
@@ -169,11 +169,19 @@ export default function App() {
               </>
             )}
           </button>
+          
+          <button
+            type="button"
+            onClick={() => setShowAsLinks(!showAsLinks)}
+            className="w-full py-3 px-6 rounded-2xl text-xs font-bold tracking-wide transition-all shadow-md border cursor-pointer focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700 uppercase"
+          >
+            {showAsLinks ? 'MOSTRA SOLO NOMI' : 'CREA LINK AI PROFILI'}
+          </button>
         </div>
 
         {/* Right Side: Results Section */}
         <div ref={resultsRef} className="lg:col-span-5 flex flex-col min-h-0">
-          <ResultsView stats={stats} onReset={handleReset} />
+          <ResultsView stats={stats} onReset={handleReset} showAsLinks={showAsLinks} />
         </div>
       </main>
 
