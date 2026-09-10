@@ -13,24 +13,23 @@ export function Header({ isAnalyzed }: HeaderProps) {
             Insta<span className="text-indigo-500">Sniff</span>
           </h1>
           <span className="bg-indigo-950/60 border border-indigo-500/30 text-indigo-300 text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full">
-            v1.0
+            v1.1
           </span>
         </div>
         <p className="text-slate-400 text-xs sm:text-sm mt-1 max-w-2xl leading-relaxed">
-          Scopri istantaneamente chi non ricambia il follow su Instagram. Incolla o carica le liste esportate: il sistema pulisce automaticamente date, pulsanti dell&apos;interfaccia e formati JSON / CSV estraendo solo i profili reali.
+          Scopri chi non ricambia il follow senza login e senza API. Importa direttamente il ZIP ufficiale di Instagram oppure usa JSON, HTML, CSV e liste di username: l&apos;analisi avviene interamente nel browser.
         </p>
       </div>
 
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2 bg-slate-900 px-3.5 py-2 rounded-xl border border-slate-800 text-xs font-mono">
           <div
-            className={`w-2 h-2 rounded-full ${
-              isAnalyzed ? 'bg-indigo-400 animate-pulse' : 'bg-emerald-400'
-            }`}
+            className={`w-2 h-2 rounded-full ${isAnalyzed ? 'bg-indigo-400' : 'bg-emerald-400'}`}
+            aria-hidden="true"
           />
           <span className="uppercase tracking-wider text-slate-300 font-semibold flex items-center gap-1.5">
-            <ShieldCheck size={14} className="text-emerald-400" />
-            {isAnalyzed ? 'Analisi Pronta' : 'Parser Pronto'}
+            <ShieldCheck size={14} className="text-emerald-400" aria-hidden="true" />
+            {isAnalyzed ? 'Analisi pronta' : 'Dati solo locali'}
           </span>
         </div>
       </div>
