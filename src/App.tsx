@@ -18,6 +18,7 @@ export default function App() {
   const [alert, setAlert] = useState<AlertMessage | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showAsLinks, setShowAsLinks] = useState(false);
+  const [zipImported, setZipImported] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
   const analysisJobRef = useRef<{ cancel: () => void } | null>(null);
 
@@ -38,6 +39,7 @@ export default function App() {
     cancelRunningAnalysis();
     if (stats) setStats(null);
     if (alert) setAlert(null);
+    setZipImported(false);
   };
 
   const handleFollowersChange = (val: string) => {
@@ -62,23 +64,14 @@ export default function App() {
     });
   };
 
-  const handleZipImported = (result: ProcessedInstagramZipResult, fileName: string) => {
+  const handleZipImported = (result: ProcessedInstagramZipResult) => {
     cancelRunningAnalysis();
-
-    // Release any previous manual text instead of duplicating the ZIP data in large textareas.
     setFollowers('');
     setFollowing('');
     setStats(result.stats);
     setShowAsLinks(false);
-
-    const filesRead = result.followerFiles.length + result.followingFiles.length;
-    const warningText = result.warnings.length > 0 ? ` ${result.warnings.join(' ')}` : '';
-    setAlert({
-      type: 'success',
-      title: 'ZIP Instagram importato',
-      message: `${fileName}: ${result.followersCount} follower e ${result.followingCount} seguiti da ${filesRead} file dati. Analisi completata automaticamente.${warningText}`,
-    });
-
+    setZipImported(true);
+    setAlert(null);
     scrollToResultsOnSmallScreens();
   };
 
@@ -107,6 +100,7 @@ export default function App() {
 
     cancelRunningAnalysis();
     setIsProcessing(true);
+    setZipImported(false);
     const job = analyzeManualLists(rawFollowers, rawFollowing);
     analysisJobRef.current = job;
 
@@ -176,6 +170,7 @@ export default function App() {
     setStats(null);
     setAlert(null);
     setShowAsLinks(false);
+    setZipImported(false);
   };
 
   const isFormIncomplete = !followers.trim() || !following.trim();
@@ -183,7 +178,7 @@ export default function App() {
   return (
     <>
       <div className="min-h-screen bg-slate-950 text-slate-100 font-sans p-4 pb-24 sm:p-6 sm:pb-28 md:p-8 md:pb-28 flex flex-col gap-6">
-        <Header isAnalyzed={stats !== null} />
+        <Header />
 
         <AlertBanner alert={alert} onDismiss={() => setAlert(null)} />
 
@@ -193,52 +188,56 @@ export default function App() {
           <div className="lg:col-span-7 flex flex-col gap-4">
             <ZipImportCard onImported={handleZipImported} onError={handleZipError} />
 
-            <div className="flex items-center gap-3 text-[11px] uppercase tracking-wider font-bold text-slate-500" aria-hidden="true">
-              <span className="h-px bg-slate-800 flex-1" />
-              oppure inserisci i dati manualmente
-              <span className="h-px bg-slate-800 flex-1" />
-            </div>
+            {!zipImported && (
+              <>
+                <div className="flex items-center gap-3 text-[11px] uppercase tracking-wider font-bold text-slate-500" aria-hidden="true">
+                  <span className="h-px bg-slate-800 flex-1" />
+                  oppure inserisci i dati manualmente
+                  <span className="h-px bg-slate-800 flex-1" />
+                </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <InputCard
-                title="I tuoi Follower"
-                description="Lista o file esportato degli account che ti seguono."
-                value={followers}
-                onChange={handleFollowersChange}
-              />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <InputCard
+                    title="I tuoi Follower"
+                    description="Lista o file esportato degli account che ti seguono."
+                    value={followers}
+                    onChange={handleFollowersChange}
+                  />
 
-              <InputCard
-                title="Chi Segui"
-                description="Lista o file esportato degli account che segui."
-                value={following}
-                onChange={handleFollowingChange}
-              />
-            </div>
+                  <InputCard
+                    title="Chi Segui"
+                    description="Lista o file esportato degli account che segui."
+                    value={following}
+                    onChange={handleFollowingChange}
+                  />
+                </div>
 
-            <button
-              type="button"
-              onClick={handleProcess}
-              disabled={isFormIncomplete || isProcessing}
-              className={`w-full py-4 px-6 rounded-2xl text-sm font-bold tracking-wide flex items-center justify-center gap-2 transition-all uppercase shadow-lg border cursor-pointer focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none ${
-                isFormIncomplete || isProcessing
-                  ? 'bg-slate-800 text-slate-500 border-slate-700/50 cursor-not-allowed shadow-none'
-                  : 'bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 active:scale-[0.99] text-white border-indigo-500/30 shadow-indigo-600/20'
-              }`}
-              aria-label="Avvia confronto e trova chi non ricambia il follow"
-              aria-busy={isProcessing}
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 size={18} className="animate-spin" aria-hidden="true" />
-                  Elaborazione in corso...
-                </>
-              ) : (
-                <>
-                  <Search size={18} aria-hidden="true" />
-                  Trova chi non ti segue
-                </>
-              )}
-            </button>
+                <button
+                  type="button"
+                  onClick={handleProcess}
+                  disabled={isFormIncomplete || isProcessing}
+                  className={`w-full py-4 px-6 rounded-2xl text-sm font-bold tracking-wide flex items-center justify-center gap-2 transition-all uppercase shadow-lg border cursor-pointer focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none ${
+                    isFormIncomplete || isProcessing
+                      ? 'bg-slate-800 text-slate-500 border-slate-700/50 cursor-not-allowed shadow-none'
+                      : 'bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 active:scale-[0.99] text-white border-indigo-500/30 shadow-indigo-600/20'
+                  }`}
+                  aria-label="Avvia confronto e trova chi non ricambia il follow"
+                  aria-busy={isProcessing}
+                >
+                  {isProcessing ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin" aria-hidden="true" />
+                      Elaborazione in corso...
+                    </>
+                  ) : (
+                    <>
+                      <Search size={18} aria-hidden="true" />
+                      Trova chi non ti segue
+                    </>
+                  )}
+                </button>
+              </>
+            )}
 
             {stats && (
               <button
