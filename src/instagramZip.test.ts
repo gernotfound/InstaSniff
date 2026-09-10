@@ -139,6 +139,22 @@ describe('extractOfficialInstagramUsernames', () => {
       'foxtrot_1',
     ]);
   });
+
+  it('supports current following HTML links that use the /_u/ route', () => {
+    const content = `
+      <html><body>
+        <h2>therestisscience</h2>
+        <a href="https://www.instagram.com/_u/therestisscience">profile</a>
+        <h2>carlosdonpanino</h2>
+        <a href="https://www.instagram.com/_u/carlosdonpanino">profile</a>
+      </body></html>
+    `;
+
+    expect(extractOfficialInstagramUsernames(content, 'following.html')).toEqual([
+      'therestisscience',
+      'carlosdonpanino',
+    ]);
+  });
 });
 
 describe('importInstagramZip', () => {
@@ -171,6 +187,54 @@ describe('importInstagramZip', () => {
     expect(result.followerFiles).toHaveLength(2);
     expect(result.followingFiles).toHaveLength(1);
     expect(result.warnings).toContain('Uniti automaticamente 2 file follower.');
+  });
+
+  it('parses current HTML exports inside the ZIP without collapsing following to _u', async () => {
+    const zip = createStoredZip([
+      {
+        name: 'connections/followers_and_following/followers_1.html',
+        content: `
+          <a href="https://www.instagram.com/alice.example">alice.example</a>
+          <a href="https://www.instagram.com/bob_test">bob_test</a>
+        `,
+      },
+      {
+        name: 'connections/followers_and_following/following.html',
+        content: `
+          <a href="https://www.instagram.com/_u/alice.example">alice.example</a>
+          <a href="https://www.instagram.com/_u/charlie_92">charlie_92</a>
+        `,
+      },
+    ]);
+
+    const result = await importInstagramZip(zip);
+    expect(result.followers).toEqual(['alice.example', 'bob_test']);
+    expect(result.following).toEqual(['alice.example', 'charlie_92']);
+  });
+
+  it('finds relationship files after thousands of irrelevant archive entries', async () => {
+    const irrelevant = Array.from({ length: 5_000 }, (_, index) => ({
+      name: `media/photos/photo-${index}.jpg`,
+      content: '',
+    }));
+
+    const zip = createStoredZip([
+      ...irrelevant,
+      {
+        name: 'connections/followers_and_following/followers_1.json',
+        content: JSON.stringify([relationship('alice')]),
+      },
+      {
+        name: 'connections/followers_and_following/following.json',
+        content: JSON.stringify({ relationships_following: [relationship('alice')] }),
+      },
+    ]);
+
+    const result = await importInstagramZip(zip);
+    expect(result.followers).toEqual(['alice']);
+    expect(result.following).toEqual(['alice']);
+    expect(result.followerFiles).toHaveLength(1);
+    expect(result.followingFiles).toHaveLength(1);
   });
 
   it('accepts a valid export where one relationship list is empty', async () => {
