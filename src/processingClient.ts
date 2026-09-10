@@ -1,7 +1,5 @@
 import type { AnalysisStats } from './utils';
 import type { InstagramZipImportResult } from './instagramZip';
-import { computeAnalysis, parseInstagramText } from './utils';
-import { importInstagramZip } from './instagramZip';
 
 interface ProcessingJob<T> {
   promise: Promise<T>;
@@ -30,10 +28,7 @@ function createAbortError(): Error {
   return error;
 }
 
-function runWorkerJob<T>(
-  payload: Record<string, unknown>,
-  fallback: () => Promise<T> | T
-): ProcessingJob<T> {
+function runWorkerJob<T>(payload: Record<string, unknown>): ProcessingJob<T> {
   const id = nextJobId++;
   let worker: Worker | null = null;
   let settled = false;
@@ -58,8 +53,12 @@ function runWorkerJob<T>(
       reject(reason);
     };
 
+    if (typeof Worker === 'undefined') {
+      rejectOnce(new Error('Questo browser non supporta i Web Worker richiesti per elaborare i dati in sicurezza. Aggiorna il browser e riprova.'));
+      return;
+    }
+
     try {
-      if (typeof Worker === 'undefined') throw new Error('Web Worker non disponibile');
       worker = new Worker(new URL('./processing.worker.ts', import.meta.url), { type: 'module' });
       worker.onmessage = (event: MessageEvent<WorkerResponse<T>>) => {
         const response = event.data;
@@ -67,20 +66,21 @@ function runWorkerJob<T>(
         if (response.ok) resolveOnce(response.result);
         else rejectOnce(new Error(response.error));
       };
-      worker.onerror = () => {
-        worker?.terminate();
-        worker = null;
-        Promise.resolve()
-          .then(fallback)
-          .then(resolveOnce, rejectOnce);
+      worker.onerror = (event: ErrorEvent) => {
+        rejectOnce(
+          new Error(
+            event.message
+              ? `Elaborazione interrotta: ${event.message}`
+              : 'Il processo di elaborazione si è arrestato in modo anomalo. Riprova con l’export originale di Instagram.'
+          )
+        );
+      };
+      worker.onmessageerror = () => {
+        rejectOnce(new Error('Il browser non è riuscito a trasferire correttamente i dati al processo di elaborazione.'));
       };
       worker.postMessage({ id, ...payload });
     } catch {
-      worker?.terminate();
-      worker = null;
-      Promise.resolve()
-        .then(fallback)
-        .then(resolveOnce, rejectOnce);
+      rejectOnce(new Error('Impossibile avviare il processo isolato di elaborazione. Aggiorna il browser e riprova.'));
     }
   });
 
@@ -100,15 +100,9 @@ export function analyzeManualLists(
   followersText: string,
   followingText: string
 ): ProcessingJob<AnalysisStats> {
-  return runWorkerJob<AnalysisStats>(
-    { kind: 'manual', followersText, followingText },
-    () => computeAnalysis(parseInstagramText(followingText), parseInstagramText(followersText))
-  );
+  return runWorkerJob<AnalysisStats>({ kind: 'manual', followersText, followingText });
 }
 
 export function importInstagramZipInWorker(file: File): ProcessingJob<InstagramZipImportResult> {
-  return runWorkerJob<InstagramZipImportResult>(
-    { kind: 'zip', file },
-    () => importInstagramZip(file)
-  );
+  return runWorkerJob<InstagramZipImportResult>({ kind: 'zip', file });
 }
