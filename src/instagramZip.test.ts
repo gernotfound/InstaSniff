@@ -12,6 +12,24 @@ function concatBytes(parts: Uint8Array[]): Uint8Array {
   return output;
 }
 
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let value = i;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) !== 0 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[i] = value >>> 0;
+  }
+  return table;
+})();
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
 function createStoredZip(entries: Array<{ name: string; content: string }>): File {
   const encoder = new TextEncoder();
   const localParts: Uint8Array[] = [];
@@ -21,6 +39,7 @@ function createStoredZip(entries: Array<{ name: string; content: string }>): Fil
   for (const entry of entries) {
     const name = encoder.encode(entry.name);
     const data = encoder.encode(entry.content);
+    const checksum = crc32(data);
 
     const local = new Uint8Array(30 + name.byteLength + data.byteLength);
     const localView = new DataView(local.buffer);
@@ -28,6 +47,7 @@ function createStoredZip(entries: Array<{ name: string; content: string }>): Fil
     localView.setUint16(4, 20, true);
     localView.setUint16(6, 0, true);
     localView.setUint16(8, 0, true);
+    localView.setUint32(14, checksum, true);
     localView.setUint32(18, data.byteLength, true);
     localView.setUint32(22, data.byteLength, true);
     localView.setUint16(26, name.byteLength, true);
@@ -43,6 +63,7 @@ function createStoredZip(entries: Array<{ name: string; content: string }>): Fil
     centralView.setUint16(6, 20, true);
     centralView.setUint16(8, 0, true);
     centralView.setUint16(10, 0, true);
+    centralView.setUint32(16, checksum, true);
     centralView.setUint32(20, data.byteLength, true);
     centralView.setUint32(24, data.byteLength, true);
     centralView.setUint16(28, name.byteLength, true);
@@ -150,5 +171,62 @@ describe('importInstagramZip', () => {
     expect(result.followerFiles).toHaveLength(2);
     expect(result.followingFiles).toHaveLength(1);
     expect(result.warnings).toContain('Uniti automaticamente 2 file follower.');
+  });
+
+  it('accepts a valid export where one relationship list is empty', async () => {
+    const zip = createStoredZip([
+      {
+        name: 'connections/followers_and_following/followers_1.json',
+        content: JSON.stringify([]),
+      },
+      {
+        name: 'connections/followers_and_following/following.json',
+        content: JSON.stringify({ relationships_following: [relationship('solo_account')] }),
+      },
+    ]);
+
+    const result = await importInstagramZip(zip);
+    expect(result.followers).toEqual([]);
+    expect(result.following).toEqual(['solo_account']);
+    expect(result.warnings).toContain('Il file follower è valido ma non contiene account.');
+  });
+
+  it('rejects a ZIP whose payload no longer matches its CRC', async () => {
+    const zip = createStoredZip([
+      {
+        name: 'connections/followers_and_following/followers_1.json',
+        content: JSON.stringify([relationship('alice')]),
+      },
+      {
+        name: 'connections/followers_and_following/following.json',
+        content: JSON.stringify({ relationships_following: [relationship('alice')] }),
+      },
+    ]);
+    const bytes = new Uint8Array(await zip.arrayBuffer());
+    const needle = new TextEncoder().encode('alice');
+    let changed = false;
+    for (let i = 0; i <= bytes.length - needle.length; i += 1) {
+      let matches = true;
+      for (let j = 0; j < needle.length; j += 1) {
+        if (bytes[i + j] !== needle[j]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        bytes[i] = 'b'.charCodeAt(0);
+        changed = true;
+        break;
+      }
+    }
+    expect(changed).toBe(true);
+
+    const corrupted = new File([bytes], 'instagram-export.zip', { type: 'application/zip' });
+    await expect(importInstagramZip(corrupted)).rejects.toThrow(/CRC|danneggiato/i);
+  });
+
+  it('rejects files that are not ZIP archives', async () => {
+    const invalid = new File(['plain text'], 'instagram-export.zip', { type: 'application/zip' });
+    await expect(importInstagramZip(invalid)).rejects.toThrow(/ZIP valido|completo/i);
   });
 });
