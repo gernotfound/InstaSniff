@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Upload, Trash2, Clipboard, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { parseInstagramText } from '../utils';
+import { extractOfficialInstagramUsernames } from '../instagramZip';
 
 interface InputCardProps {
   title: string;
@@ -13,6 +14,7 @@ const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
 const MAX_TEXT_CHARS = 12_000_000;
 const LIVE_COUNT_MAX_CHARS = 300_000;
 const ALLOWED_FILE_PATTERN = /\.(txt|html?|json|csv|tsv)$/i;
+const OFFICIAL_EXPORT_PATTERN = /\.(html?|json)$/i;
 
 export function InputCard({ title, description, value, onChange }: InputCardProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -45,14 +47,27 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
     return true;
   };
 
-  const processFileContent = (content: string) => {
+  const processFileContent = (content: string, fileName: string) => {
     if (content.length > MAX_TEXT_CHARS) {
       setFileError('Il contenuto del file è troppo grande per l’import manuale. Usa il caricamento ZIP qui sopra.');
       return;
     }
 
     try {
-      const parsedUsernames = parseInstagramText(content);
+      let parsedUsernames: string[] = [];
+
+      if (OFFICIAL_EXPORT_PATTERN.test(fileName)) {
+        try {
+          parsedUsernames = extractOfficialInstagramUsernames(content, fileName);
+        } catch {
+          parsedUsernames = [];
+        }
+      }
+
+      if (parsedUsernames.length === 0) {
+        parsedUsernames = parseInstagramText(content);
+      }
+
       setBoundedValue(parsedUsernames.length > 0 ? parsedUsernames.join('\n') : content);
       setFileError(null);
     } catch {
@@ -82,7 +97,7 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
       if (operationId !== fileOperationRef.current) return;
       activeReaderRef.current = null;
       if (typeof event.target?.result === 'string') {
-        processFileContent(event.target.result);
+        processFileContent(event.target.result, file.name);
       } else {
         setFileError('Il browser non ha restituito il file come testo leggibile.');
       }
