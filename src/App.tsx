@@ -7,9 +7,8 @@ import { StatsCard } from './components/StatsCard';
 import { ZipImportCard } from './components/ZipImportCard';
 import { PrivacyBanner } from './components/PrivacyBanner';
 import { AlertBanner, AlertMessage } from './components/AlertBanner';
-import { computeAnalysis, AnalysisStats } from './utils';
-import { InstagramZipImportResult } from './instagramZip';
-import { analyzeManualLists } from './processingClient';
+import { AnalysisStats } from './utils';
+import { analyzeManualLists, type ProcessedInstagramZipResult } from './processingClient';
 import { Search, Loader2, Link2 } from 'lucide-react';
 
 export default function App() {
@@ -63,16 +62,13 @@ export default function App() {
     });
   };
 
-  const handleZipImported = (result: InstagramZipImportResult, fileName: string) => {
+  const handleZipImported = (result: ProcessedInstagramZipResult, fileName: string) => {
     cancelRunningAnalysis();
 
-    const followerText = result.followers.join('\n');
-    const followingText = result.following.join('\n');
-    const calculatedStats = computeAnalysis(result.following, result.followers);
-
-    setFollowers(followerText);
-    setFollowing(followingText);
-    setStats(calculatedStats);
+    // Release any previous manual text instead of duplicating the ZIP data in large textareas.
+    setFollowers('');
+    setFollowing('');
+    setStats(result.stats);
     setShowAsLinks(false);
 
     const filesRead = result.followerFiles.length + result.followingFiles.length;
@@ -80,7 +76,7 @@ export default function App() {
     setAlert({
       type: 'success',
       title: 'ZIP Instagram importato',
-      message: `${fileName}: ${result.followers.length} follower e ${result.following.length} seguiti da ${filesRead} file dati. Analisi completata automaticamente.${warningText}`,
+      message: `${fileName}: ${result.followersCount} follower e ${result.followingCount} seguiti da ${filesRead} file dati. Analisi completata automaticamente.${warningText}`,
     });
 
     scrollToResultsOnSmallScreens();
