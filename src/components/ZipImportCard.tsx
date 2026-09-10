@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Archive, CheckCircle2, FileArchive, Loader2, ShieldCheck, Upload } from 'lucide-react';
-import { importInstagramZip, InstagramZipImportResult } from '../instagramZip';
+import type { InstagramZipImportResult } from '../instagramZip';
+import { importInstagramZipInWorker } from '../processingClient';
 
 interface ZipImportCardProps {
   onImported: (result: InstagramZipImportResult, fileName: string) => void;
@@ -18,6 +19,7 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const operationRef = useRef(0);
   const mountedRef = useRef(true);
+  const jobRef = useRef<{ cancel: () => void } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [lastImport, setLastImport] = useState<{
@@ -31,6 +33,8 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
     return () => {
       mountedRef.current = false;
       operationRef.current += 1;
+      jobRef.current?.cancel();
+      jobRef.current = null;
     };
   }, []);
 
@@ -42,8 +46,11 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
     setIsImporting(true);
     setLastImport(null);
 
+    const job = importInstagramZipInWorker(file);
+    jobRef.current = job;
+
     try {
-      const result = await importInstagramZip(file);
+      const result = await job.promise;
       if (!mountedRef.current || operationId !== operationRef.current) return;
 
       setLastImport({
@@ -55,9 +62,12 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
       onImported(result, file.name);
     } catch (error) {
       if (!mountedRef.current || operationId !== operationRef.current) return;
+      if (error instanceof Error && error.name === 'AbortError') return;
+
       setLastImport(null);
       onError(error instanceof Error ? error.message : 'Impossibile importare il file ZIP.');
     } finally {
+      if (jobRef.current === job) jobRef.current = null;
       if (mountedRef.current && operationId === operationRef.current) {
         setIsImporting(false);
         setIsDragging(false);
