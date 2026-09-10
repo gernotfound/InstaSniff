@@ -50,8 +50,20 @@ async function handleRequest(request: WorkerRequest): Promise<void> {
     }
 
     if (request.kind === 'zip') {
-      const result = await importInstagramZip(request.file);
-      workerScope.postMessage({ id: request.id, ok: true, result });
+      const imported = await importInstagramZip(request.file);
+      const stats = computeAnalysis(imported.following, imported.followers);
+      workerScope.postMessage({
+        id: request.id,
+        ok: true,
+        result: {
+          stats,
+          followersCount: imported.followers.length,
+          followingCount: imported.following.length,
+          followerFiles: imported.followerFiles,
+          followingFiles: imported.followingFiles,
+          warnings: imported.warnings,
+        },
+      });
       return;
     }
 
