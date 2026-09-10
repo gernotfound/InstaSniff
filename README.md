@@ -1,20 +1,45 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# InstaSniff
 
-# Run and deploy your AI Studio app
+InstaSniff confronta follower e seguiti di Instagram usando esclusivamente i dati esportati dall'utente. Non richiede login, cookie di sessione, API Instagram o backend: l'elaborazione avviene nel browser.
 
-This contains everything you need to run your app locally.
+**Demo:** https://gernotfound.github.io/InstaSniff/
 
-View your app in AI Studio: https://ai.studio/apps/a40882f1-5422-4de6-9a95-b3fe585e5ae6
+## Funzioni
 
-## Run Locally
+- Import diretto del file ZIP ufficiale scaricato da Instagram/Meta.
+- Rilevamento automatico di `following.json` e di tutti i file `followers_*.json` presenti nell'archivio.
+- Compatibilità di fallback con export HTML, file JSON/CSV/TSV/TXT e liste incollate.
+- Confronto tra account che non ricambiano, follower che non segui e follow reciproci.
+- Ricerca, ordinamento, link ai profili, copia ed export TXT/CSV/JSON.
+- Elaborazione 100% client-side: i file non vengono inviati a server esterni.
 
-**Prerequisites:**  Node.js
+## Ottenere il file corretto da Instagram
 
+Da **Centro gestione account** apri **Le tue informazioni e autorizzazioni → Scarica le tue informazioni**, seleziona il profilo Instagram e scegli **Alcune delle tue informazioni → Follower e seguiti**.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Per un confronto completo usa **Dall'inizio** come intervallo e **JSON** come formato. Meta restituisce un file `.zip`; InstaSniff può leggerlo direttamente, senza estrarlo. In genere l'archivio contiene `following.json` e `followers_1.json`; gli account con molti follower possono avere anche `followers_2.json`, `followers_3.json`, ecc.
+
+## Sviluppo locale
+
+Prerequisito: Node.js.
+
+```bash
+npm ci
+npm run dev
+```
+
+Controlli di qualità:
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+## Deploy
+
+Ogni push su `main` esegue lint, typecheck, test e build; se tutto passa, GitHub Actions pubblica `dist/` su GitHub Pages.
+
+## Privacy
+
+InstaSniff è un'applicazione statica. Il parser ZIP legge nel browser soltanto i file necessari al confronto e non estrae foto o video dall'archivio. Nessun dato dell'export viene inviato a un backend.
