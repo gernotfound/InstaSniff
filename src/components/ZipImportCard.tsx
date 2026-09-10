@@ -1,10 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Archive, CheckCircle2, FileArchive, Loader2, ShieldCheck, Upload } from 'lucide-react';
-import type { InstagramZipImportResult } from '../instagramZip';
-import { importInstagramZipInWorker } from '../processingClient';
+import { importInstagramZipInWorker, type ProcessedInstagramZipResult } from '../processingClient';
 
 interface ZipImportCardProps {
-  onImported: (result: InstagramZipImportResult, fileName: string) => void;
+  onImported: (result: ProcessedInstagramZipResult, fileName: string) => void;
   onError: (message: string) => void;
 }
 
@@ -56,8 +55,8 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
       setLastImport({
         name: file.name,
         size: file.size,
-        followers: result.followers.length,
-        following: result.following.length,
+        followers: result.followersCount,
+        following: result.followingCount,
       });
       onImported(result, file.name);
     } catch (error) {
