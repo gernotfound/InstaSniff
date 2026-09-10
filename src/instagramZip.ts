@@ -12,9 +12,16 @@ interface ZipEntry {
   name: string;
   compressionMethod: number;
   flags: number;
+  crc32: number;
   compressedSize: number;
   uncompressedSize: number;
   localHeaderOffset: number;
+}
+
+interface ZipDirectoryLocation {
+  centralDirectoryOffset: number;
+  centralDirectorySize: number;
+  entryCount: number;
 }
 
 const EOCD_SIGNATURE = 0x06054b50;
@@ -22,11 +29,17 @@ const ZIP64_EOCD_SIGNATURE = 0x06064b50;
 const ZIP64_LOCATOR_SIGNATURE = 0x07064b50;
 const CENTRAL_FILE_SIGNATURE = 0x02014b50;
 const LOCAL_FILE_SIGNATURE = 0x04034b50;
+const CENTRAL_DIGITAL_SIGNATURE = 0x05054b50;
 const MAX_EOCD_SEARCH_BYTES = 22 + 65_535;
-const MAX_CENTRAL_DIRECTORY_BYTES = 128 * 1024 * 1024;
-const MAX_RELATIONSHIP_FILE_BYTES = 96 * 1024 * 1024;
+const MAX_CENTRAL_DIRECTORY_BYTES = 64 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 100_000;
+const MAX_RELATIONSHIP_FILES = 1_000;
+const MAX_RELATIONSHIP_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_TOTAL_RELATIONSHIP_BYTES = 96 * 1024 * 1024;
+const LARGE_JSON_PARSE_THRESHOLD = 6 * 1024 * 1024;
+const MAX_JSON_NODES = 1_000_000;
 
-const decoder = new TextDecoder('utf-8');
+const decoder = new TextDecoder('utf-8', { fatal: false });
 
 function toSafeNumber(value: bigint, label: string): number {
   if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
@@ -35,33 +48,63 @@ function toSafeNumber(value: bigint, label: string): number {
   return Number(value);
 }
 
-async function readZipDirectoryLocation(file: File): Promise<{
-  centralDirectoryOffset: number;
-  centralDirectorySize: number;
-}> {
+function assertSliceBounds(start: number, length: number, fileSize: number, label: string): void {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0) {
+    throw new Error(`${label} contiene valori non validi.`);
+  }
+  if (start > fileSize || length > fileSize - start) {
+    throw new Error(`${label} punta fuori dai limiti del file ZIP.`);
+  }
+}
+
+function findEocdIndex(tail: Uint8Array): number {
+  if (tail.byteLength < 22) return -1;
+  const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
+
+  for (let i = tail.byteLength - 22; i >= 0; i -= 1) {
+    if (view.getUint32(i, true) !== EOCD_SIGNATURE) continue;
+    const commentLength = view.getUint16(i + 20, true);
+    if (i + 22 + commentLength === tail.byteLength) return i;
+  }
+
+  return -1;
+}
+
+async function readZipDirectoryLocation(file: File): Promise<ZipDirectoryLocation> {
   const tailStart = Math.max(0, file.size - MAX_EOCD_SEARCH_BYTES);
   const tail = new Uint8Array(await file.slice(tailStart).arrayBuffer());
   const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
-
-  let eocdIndex = -1;
-  for (let i = tail.length - 22; i >= 0; i -= 1) {
-    if (view.getUint32(i, true) === EOCD_SIGNATURE) {
-      eocdIndex = i;
-      break;
-    }
-  }
+  const eocdIndex = findEocdIndex(tail);
 
   if (eocdIndex < 0) {
     throw new Error('Il file non sembra essere un archivio ZIP valido o completo.');
   }
 
+  const diskNumber = view.getUint16(eocdIndex + 4, true);
+  const centralDirectoryDisk = view.getUint16(eocdIndex + 6, true);
+  const entriesOnDisk = view.getUint16(eocdIndex + 8, true);
+  const totalEntries16 = view.getUint16(eocdIndex + 10, true);
   const centralDirectorySize32 = view.getUint32(eocdIndex + 12, true);
   const centralDirectoryOffset32 = view.getUint32(eocdIndex + 16, true);
 
-  if (centralDirectorySize32 !== 0xffffffff && centralDirectoryOffset32 !== 0xffffffff) {
+  if (diskNumber !== 0 || centralDirectoryDisk !== 0) {
+    throw new Error('Gli archivi ZIP suddivisi su più file non sono supportati. Usa il file ZIP originale scaricato da Meta.');
+  }
+
+  const needsZip64 =
+    entriesOnDisk === 0xffff ||
+    totalEntries16 === 0xffff ||
+    centralDirectorySize32 === 0xffffffff ||
+    centralDirectoryOffset32 === 0xffffffff;
+
+  if (!needsZip64) {
+    if (entriesOnDisk !== totalEntries16) {
+      throw new Error('L’indice ZIP non è coerente: il file potrebbe essere incompleto.');
+    }
     return {
       centralDirectoryOffset: centralDirectoryOffset32,
       centralDirectorySize: centralDirectorySize32,
+      entryCount: totalEntries16,
     };
   }
 
@@ -72,10 +115,15 @@ async function readZipDirectoryLocation(file: File): Promise<{
     );
   }
 
-  const zip64EocdOffset = toSafeNumber(
-    view.getBigUint64(locatorIndex + 8, true),
-    'L’offset ZIP64'
-  );
+  const zip64Disk = view.getUint32(locatorIndex + 4, true);
+  const totalDisks = view.getUint32(locatorIndex + 16, true);
+  if (zip64Disk !== 0 || totalDisks !== 1) {
+    throw new Error('Gli archivi ZIP64 suddivisi su più file non sono supportati.');
+  }
+
+  const zip64EocdOffset = toSafeNumber(view.getBigUint64(locatorIndex + 8, true), 'L’offset ZIP64');
+  assertSliceBounds(zip64EocdOffset, 56, file.size, 'L’indice ZIP64');
+
   const zip64Header = new Uint8Array(await file.slice(zip64EocdOffset, zip64EocdOffset + 56).arrayBuffer());
   const zip64View = new DataView(zip64Header.buffer, zip64Header.byteOffset, zip64Header.byteLength);
 
@@ -83,9 +131,18 @@ async function readZipDirectoryLocation(file: File): Promise<{
     throw new Error('Indice ZIP64 non valido o danneggiato.');
   }
 
+  const diskNumber64 = zip64View.getUint32(16, true);
+  const centralDirectoryDisk64 = zip64View.getUint32(20, true);
+  const entriesOnDisk64 = zip64View.getBigUint64(24, true);
+  const totalEntries64 = zip64View.getBigUint64(32, true);
+  if (diskNumber64 !== 0 || centralDirectoryDisk64 !== 0 || entriesOnDisk64 !== totalEntries64) {
+    throw new Error('L’indice ZIP64 indica un archivio multi-volume o incoerente, non supportato.');
+  }
+
   return {
     centralDirectorySize: toSafeNumber(zip64View.getBigUint64(40, true), 'La directory ZIP'),
     centralDirectoryOffset: toSafeNumber(zip64View.getBigUint64(48, true), 'L’offset ZIP'),
+    entryCount: toSafeNumber(totalEntries64, 'Il numero di file nello ZIP'),
   };
 }
 
@@ -129,14 +186,18 @@ function parseZip64Extra(
 }
 
 async function listZipEntries(file: File): Promise<ZipEntry[]> {
-  const { centralDirectoryOffset, centralDirectorySize } = await readZipDirectoryLocation(file);
+  const { centralDirectoryOffset, centralDirectorySize, entryCount } = await readZipDirectoryLocation(file);
 
+  if (entryCount > MAX_ZIP_ENTRIES) {
+    throw new Error(`Il ZIP contiene troppi file (${entryCount}). Esporta da Instagram solo “Follower e seguiti”.`);
+  }
   if (centralDirectorySize > MAX_CENTRAL_DIRECTORY_BYTES) {
     throw new Error(
       'L’indice del ZIP è troppo grande. Per InstaSniff esporta da Instagram solo “Follower e seguiti”, intervallo completo, formato JSON.'
     );
   }
 
+  assertSliceBounds(centralDirectoryOffset, centralDirectorySize, file.size, 'La directory centrale ZIP');
   const bytes = new Uint8Array(
     await file.slice(centralDirectoryOffset, centralDirectoryOffset + centralDirectorySize).arrayBuffer()
   );
@@ -144,17 +205,25 @@ async function listZipEntries(file: File): Promise<ZipEntry[]> {
   const entries: ZipEntry[] = [];
   let offset = 0;
 
-  while (offset + 46 <= bytes.byteLength) {
-    if (view.getUint32(offset, true) !== CENTRAL_FILE_SIGNATURE) break;
+  while (entries.length < entryCount) {
+    if (offset + 46 > bytes.byteLength || view.getUint32(offset, true) !== CENTRAL_FILE_SIGNATURE) {
+      throw new Error('La directory del ZIP risulta troncata o danneggiata.');
+    }
 
     const flags = view.getUint16(offset + 8, true);
     const compressionMethod = view.getUint16(offset + 10, true);
+    const crc32 = view.getUint32(offset + 16, true);
     let compressedSize = view.getUint32(offset + 20, true);
     let uncompressedSize = view.getUint32(offset + 24, true);
     const fileNameLength = view.getUint16(offset + 28, true);
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
+    const diskStart = view.getUint16(offset + 34, true);
     let localHeaderOffset = view.getUint32(offset + 42, true);
+
+    if (diskStart !== 0 && diskStart !== 0xffff) {
+      throw new Error('Il ZIP contiene file distribuiti su più volumi, non supportati.');
+    }
 
     const fileNameStart = offset + 46;
     const extraStart = fileNameStart + fileNameLength;
@@ -163,9 +232,7 @@ async function listZipEntries(file: File): Promise<ZipEntry[]> {
       throw new Error('La directory del ZIP risulta troncata o danneggiata.');
     }
 
-    const fileNameBytes = bytes.subarray(fileNameStart, fileNameStart + fileNameLength);
-    const name = decoder.decode(fileNameBytes);
-
+    const name = decoder.decode(bytes.subarray(fileNameStart, fileNameStart + fileNameLength));
     const needs = {
       uncompressed: uncompressedSize === 0xffffffff,
       compressed: compressedSize === 0xffffffff,
@@ -179,8 +246,23 @@ async function listZipEntries(file: File): Promise<ZipEntry[]> {
       if (needs.offset) localHeaderOffset = zip64.localHeaderOffset ?? localHeaderOffset;
     }
 
-    entries.push({ name, compressionMethod, flags, compressedSize, uncompressedSize, localHeaderOffset });
+    if (uncompressedSize === 0xffffffff || compressedSize === 0xffffffff || localHeaderOffset === 0xffffffff) {
+      throw new Error(`Metadati ZIP64 incompleti per ${name || 'un file'}.`);
+    }
+    if (!Number.isSafeInteger(localHeaderOffset) || localHeaderOffset < 0 || localHeaderOffset >= file.size) {
+      throw new Error(`Offset ZIP non valido per ${name || 'un file'}.`);
+    }
+
+    entries.push({ name, compressionMethod, flags, crc32, compressedSize, uncompressedSize, localHeaderOffset });
     offset = nextOffset;
+  }
+
+  if (offset < bytes.byteLength) {
+    const remaining = bytes.byteLength - offset;
+    const hasDigitalSignature = remaining >= 6 && view.getUint32(offset, true) === CENTRAL_DIGITAL_SIGNATURE;
+    if (!hasDigitalSignature) {
+      throw new Error('La directory centrale ZIP contiene dati inattesi.');
+    }
   }
 
   return entries;
@@ -191,8 +273,8 @@ function getBaseName(path: string): string {
   return normalized.split('/').pop() ?? normalized;
 }
 
-function followerPartNumber(name: string): number {
-  const match = getBaseName(name).match(/^followers_(\d+)\./);
+function relationshipPartNumber(name: string): number {
+  const match = getBaseName(name).match(/^(?:followers|following)_(\d+)\./);
   return match ? Number(match[1]) : 0;
 }
 
@@ -205,53 +287,140 @@ function chooseRelationshipEntries(entries: ZipEntry[], kind: 'followers' | 'fol
     ? jsonEntries
     : entries.filter((entry) => htmlPattern.test(getBaseName(entry.name)));
 
-  return [...selected].sort((a, b) => followerPartNumber(a.name) - followerPartNumber(b.name));
+  if (selected.length > MAX_RELATIONSHIP_FILES) {
+    throw new Error('Il ZIP contiene un numero anomalo di file follower/seguiti e non verrà elaborato.');
+  }
+
+  return [...selected].sort((a, b) => relationshipPartNumber(a.name) - relationshipPartNumber(b.name));
 }
 
-async function inflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    let value = i;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) !== 0 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[i] = value >>> 0;
+  }
+  return table;
+})();
+
+function calculateCrc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function concatChunks(chunks: Uint8Array[], totalBytes: number): Uint8Array {
+  const output = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+async function inflateRaw(bytes: Uint8Array, expectedBytes: number, fileName: string): Promise<Uint8Array> {
   if (typeof DecompressionStream === 'undefined') {
     throw new Error('Il browser non supporta la decompressione ZIP richiesta. Aggiornalo e riprova.');
   }
 
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
   try {
     const stream = new Blob([bytes]).stream().pipeThrough(
       new DecompressionStream('deflate-raw' as CompressionFormat)
     );
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+    reader = stream.getReader();
   } catch {
-    throw new Error('Impossibile decomprimere uno dei file dati presenti nel ZIP.');
+    throw new Error(`Impossibile inizializzare la decompressione di ${fileName}.`);
   }
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    let part: ReadableStreamReadResult<Uint8Array>;
+    try {
+      part = await reader.read();
+    } catch {
+      throw new Error(`Impossibile decomprimere ${fileName}: il file potrebbe essere danneggiato.`);
+    }
+    if (part.done) break;
+    if (!part.value) continue;
+
+    totalBytes += part.value.byteLength;
+    if (totalBytes > MAX_RELATIONSHIP_FILE_BYTES || totalBytes > expectedBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`${fileName} supera la dimensione dichiarata o il limite di sicurezza durante la decompressione.`);
+    }
+    chunks.push(part.value);
+  }
+
+  if (totalBytes !== expectedBytes) {
+    throw new Error(`${fileName} ha una dimensione decompressa diversa da quella dichiarata: il ZIP potrebbe essere corrotto.`);
+  }
+
+  return concatChunks(chunks, totalBytes);
 }
 
 async function readEntryText(file: File, entry: ZipEntry): Promise<string> {
-  if (entry.flags & 0x1) {
+  const fileName = getBaseName(entry.name) || 'file dati';
+  if ((entry.flags & 0x1) !== 0 || (entry.flags & 0x40) !== 0) {
     throw new Error('Il ZIP risulta cifrato. Scarica l’archivio originale di Instagram senza modificarlo.');
   }
   if (entry.uncompressedSize > MAX_RELATIONSHIP_FILE_BYTES) {
-    throw new Error(`Il file ${getBaseName(entry.name)} è insolitamente grande e non verrà aperto per sicurezza.`);
+    throw new Error(`${fileName} è troppo grande per essere aperto in sicurezza nel browser.`);
+  }
+  if (entry.compressionMethod !== 0 && entry.compressionMethod !== 8) {
+    throw new Error(`Metodo di compressione ZIP non supportato (${entry.compressionMethod}) per ${fileName}.`);
   }
 
-  const localHeader = new Uint8Array(
-    await file.slice(entry.localHeaderOffset, entry.localHeaderOffset + 30).arrayBuffer()
-  );
-  if (localHeader.byteLength < 30) throw new Error('Header ZIP troncato.');
+  assertSliceBounds(entry.localHeaderOffset, 30, file.size, `L’header di ${fileName}`);
+  const localHeader = new Uint8Array(await file.slice(entry.localHeaderOffset, entry.localHeaderOffset + 30).arrayBuffer());
   const localView = new DataView(localHeader.buffer, localHeader.byteOffset, localHeader.byteLength);
-  if (localView.getUint32(0, true) !== LOCAL_FILE_SIGNATURE) throw new Error('Header di un file ZIP non valido.');
+  if (localHeader.byteLength < 30 || localView.getUint32(0, true) !== LOCAL_FILE_SIGNATURE) {
+    throw new Error(`Header ZIP non valido per ${fileName}.`);
+  }
 
+  const localFlags = localView.getUint16(6, true);
+  const localCompressionMethod = localView.getUint16(8, true);
   const fileNameLength = localView.getUint16(26, true);
   const extraLength = localView.getUint16(28, true);
-  const dataStart = entry.localHeaderOffset + 30 + fileNameLength + extraLength;
-  const compressed = new Uint8Array(
-    await file.slice(dataStart, dataStart + entry.compressedSize).arrayBuffer()
-  );
+  if ((localFlags & 0x1) !== 0 || (localFlags & 0x40) !== 0) {
+    throw new Error('Il ZIP risulta cifrato. Scarica l’archivio originale di Instagram senza modificarlo.');
+  }
+  if (localCompressionMethod !== entry.compressionMethod) {
+    throw new Error(`Metadati di compressione incoerenti per ${fileName}.`);
+  }
+
+  const localNameStart = entry.localHeaderOffset + 30;
+  assertSliceBounds(localNameStart, fileNameLength + extraLength, file.size, `I metadati locali di ${fileName}`);
+  const localNameBytes = new Uint8Array(await file.slice(localNameStart, localNameStart + fileNameLength).arrayBuffer());
+  const localName = decoder.decode(localNameBytes);
+  if (getBaseName(localName) !== getBaseName(entry.name)) {
+    throw new Error(`L’indice ZIP non corrisponde al contenuto locale di ${fileName}.`);
+  }
+
+  const dataStart = localNameStart + fileNameLength + extraLength;
+  assertSliceBounds(dataStart, entry.compressedSize, file.size, `I dati compressi di ${fileName}`);
+  const compressed = new Uint8Array(await file.slice(dataStart, dataStart + entry.compressedSize).arrayBuffer());
 
   let uncompressed: Uint8Array;
   if (entry.compressionMethod === 0) {
+    if (compressed.byteLength !== entry.uncompressedSize) {
+      throw new Error(`${fileName} ha una dimensione non coerente con l’indice ZIP.`);
+    }
     uncompressed = compressed;
-  } else if (entry.compressionMethod === 8) {
-    uncompressed = await inflateRaw(compressed);
   } else {
-    throw new Error(`Metodo di compressione ZIP non supportato (${entry.compressionMethod}) per ${getBaseName(entry.name)}.`);
+    uncompressed = await inflateRaw(compressed, entry.uncompressedSize, fileName);
+  }
+
+  if (calculateCrc32(uncompressed) !== entry.crc32) {
+    throw new Error(`${fileName} non supera il controllo di integrità CRC: il ZIP potrebbe essere danneggiato.`);
   }
 
   return decoder.decode(uncompressed).replace(/^\uFEFF/, '');
@@ -264,28 +433,48 @@ function addCandidate(value: unknown, result: Set<string>): void {
 }
 
 function collectOfficialJsonUsernames(node: unknown, result: Set<string>): void {
-  if (Array.isArray(node)) {
-    for (const item of node) collectOfficialJsonUsernames(item, result);
-    return;
-  }
+  const stack: unknown[] = [node];
+  let visited = 0;
 
-  if (!node || typeof node !== 'object') return;
-  const obj = node as Record<string, unknown>;
-
-  if (Array.isArray(obj.string_list_data)) {
-    for (const rawItem of obj.string_list_data) {
-      if (!rawItem || typeof rawItem !== 'object') continue;
-      const item = rawItem as Record<string, unknown>;
-      addCandidate(item.value, result);
-      addCandidate(item.href, result);
+  while (stack.length > 0) {
+    visited += 1;
+    if (visited > MAX_JSON_NODES) {
+      throw new Error('Il JSON contiene una struttura insolitamente complessa e non verrà elaborato.');
     }
-    addCandidate(obj.title, result);
-    return;
-  }
 
-  for (const value of Object.values(obj)) {
-    if (value && typeof value === 'object') collectOfficialJsonUsernames(value, result);
+    const current = stack.pop();
+    if (!current || typeof current !== 'object') continue;
+
+    if (Array.isArray(current)) {
+      for (let i = current.length - 1; i >= 0; i -= 1) stack.push(current[i]);
+      continue;
+    }
+
+    const obj = current as Record<string, unknown>;
+    if (Array.isArray(obj.string_list_data)) {
+      for (const rawItem of obj.string_list_data) {
+        if (!rawItem || typeof rawItem !== 'object') continue;
+        const item = rawItem as Record<string, unknown>;
+        addCandidate(item.value, result);
+        addCandidate(item.href, result);
+      }
+      addCandidate(obj.title, result);
+      continue;
+    }
+
+    for (const value of Object.values(obj)) {
+      if (value && typeof value === 'object') stack.push(value);
+    }
   }
+}
+
+function collectLargeOfficialJsonByPattern(content: string, result: Set<string>): void {
+  const directValuePattern = /"(?:value|title)"\s*:\s*"([a-zA-Z0-9._]{1,30})"/g;
+  const hrefPattern = /"href"\s*:\s*"(?:https?:\\?\/\\?\/)?(?:www\\?\.)?instagram\.com\\?\/([a-zA-Z0-9._]{1,30})/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = directValuePattern.exec(content)) !== null) addCandidate(match[1], result);
+  while ((match = hrefPattern.exec(content)) !== null) addCandidate(match[1], result);
 }
 
 export function extractOfficialInstagramUsernames(content: string, fileName: string): string[] {
@@ -293,11 +482,17 @@ export function extractOfficialInstagramUsernames(content: string, fileName: str
   const lowerName = fileName.toLowerCase();
 
   if (lowerName.endsWith('.json')) {
+    if (content.length > LARGE_JSON_PARSE_THRESHOLD) {
+      collectLargeOfficialJsonByPattern(content, result);
+      if (result.size > 0) return Array.from(result);
+    }
+
     try {
       collectOfficialJsonUsernames(JSON.parse(content), result);
       return Array.from(result);
-    } catch {
-      throw new Error(`${getBaseName(fileName)} non contiene JSON valido.`);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('insolitamente complessa')) throw error;
+      throw new Error(`${getBaseName(fileName)} non contiene JSON valido o leggibile.`);
     }
   }
 
@@ -310,6 +505,21 @@ export function extractOfficialInstagramUsernames(content: string, fileName: str
   }
 
   return Array.from(result);
+}
+
+function validateSelectedEntries(entries: ZipEntry[]): void {
+  let totalUncompressedBytes = 0;
+  for (const entry of entries) {
+    if (entry.uncompressedSize > MAX_RELATIONSHIP_FILE_BYTES) {
+      throw new Error(`${getBaseName(entry.name)} è troppo grande per essere elaborato in sicurezza nel browser.`);
+    }
+    totalUncompressedBytes += entry.uncompressedSize;
+    if (totalUncompressedBytes > MAX_TOTAL_RELATIONSHIP_BYTES) {
+      throw new Error(
+        'I file follower/seguiti nell’archivio sono troppo grandi nel complesso. Esporta solo “Follower e seguiti” oppure usa un computer con più memoria.'
+      );
+    }
+  }
 }
 
 async function readSelectedEntries(file: File, entries: ZipEntry[]): Promise<string[]> {
@@ -340,21 +550,19 @@ export async function importInstagramZip(file: File): Promise<InstagramZipImport
     );
   }
 
+  validateSelectedEntries([...followerEntries, ...followingEntries]);
   const [followers, following] = await Promise.all([
     readSelectedEntries(file, followerEntries),
     readSelectedEntries(file, followingEntries),
   ]);
 
-  if (followers.length === 0 || following.length === 0) {
-    throw new Error(
-      'I file follower/seguiti sono presenti, ma non contengono account leggibili. Verifica di aver richiesto l’intervallo completo.'
-    );
-  }
-
   const usingHtml = [...followerEntries, ...followingEntries].some((entry) => /\.html?$/i.test(entry.name));
   const warnings: string[] = [];
   if (usingHtml) warnings.push('Export HTML rilevato: il formato JSON è consigliato perché più strutturato.');
   if (followerEntries.length > 1) warnings.push(`Uniti automaticamente ${followerEntries.length} file follower.`);
+  if (followingEntries.length > 1) warnings.push(`Uniti automaticamente ${followingEntries.length} file seguiti.`);
+  if (followers.length === 0) warnings.push('Il file follower è valido ma non contiene account.');
+  if (following.length === 0) warnings.push('Il file seguiti è valido ma non contiene account.');
 
   return {
     followers,
