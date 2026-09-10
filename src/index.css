@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+html {
+  overflow-x: hidden;
+}
+
+body {
+  min-width: 320px;
+  overflow-wrap: anywhere;
+}
+
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: #334155 transparent;
@@ -21,4 +30,15 @@
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background-color: #475569;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
