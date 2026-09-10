@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Archive, CheckCircle2, FileArchive, Loader2, ShieldCheck, Upload } from 'lucide-react';
+import { Archive, CheckCircle2, FileArchive, Loader2, Upload } from 'lucide-react';
 import { importInstagramZipInWorker, type ProcessedInstagramZipResult } from '../processingClient';
 
 interface ZipImportCardProps {
@@ -198,11 +198,6 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
             </p>
           </div>
         </details>
-
-        <div className="flex items-center gap-2 text-[11px] text-slate-500">
-          <ShieldCheck size={13} className="text-emerald-400 shrink-0" aria-hidden="true" />
-          <span>Elaborazione locale: il tuo ZIP non viene caricato su server esterni.</span>
-        </div>
       </div>
     </section>
   );
