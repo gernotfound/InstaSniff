@@ -1,5 +1,13 @@
 import type { AnalysisStats } from './utils';
-import type { InstagramZipImportResult } from './instagramZip';
+
+export interface ProcessedInstagramZipResult {
+  stats: AnalysisStats;
+  followersCount: number;
+  followingCount: number;
+  followerFiles: string[];
+  followingFiles: string[];
+  warnings: string[];
+}
 
 interface ProcessingJob<T> {
   promise: Promise<T>;
@@ -103,6 +111,6 @@ export function analyzeManualLists(
   return runWorkerJob<AnalysisStats>({ kind: 'manual', followersText, followingText });
 }
 
-export function importInstagramZipInWorker(file: File): ProcessingJob<InstagramZipImportResult> {
-  return runWorkerJob<InstagramZipImportResult>({ kind: 'zip', file });
+export function importInstagramZipInWorker(file: File): ProcessingJob<ProcessedInstagramZipResult> {
+  return runWorkerJob<ProcessedInstagramZipResult>({ kind: 'zip', file });
 }
