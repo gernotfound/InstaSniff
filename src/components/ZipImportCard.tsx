@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Archive, CheckCircle2, FileArchive, Loader2, ShieldCheck, Upload } from 'lucide-react';
 import { importInstagramZip, InstagramZipImportResult } from '../instagramZip';
 
@@ -16,6 +16,8 @@ function formatBytes(bytes: number): string {
 
 export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const operationRef = useRef(0);
+  const mountedRef = useRef(true);
   const [isDragging, setIsDragging] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [lastImport, setLastImport] = useState<{
@@ -25,10 +27,25 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
     following: number;
   } | null>(null);
 
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      operationRef.current += 1;
+    };
+  }, []);
+
   const processFile = async (file: File) => {
+    if (isImporting) return;
+
+    const operationId = operationRef.current + 1;
+    operationRef.current = operationId;
     setIsImporting(true);
+    setLastImport(null);
+
     try {
       const result = await importInstagramZip(file);
+      if (!mountedRef.current || operationId !== operationRef.current) return;
+
       setLastImport({
         name: file.name,
         size: file.size,
@@ -37,11 +54,15 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
       });
       onImported(result, file.name);
     } catch (error) {
+      if (!mountedRef.current || operationId !== operationRef.current) return;
       setLastImport(null);
       onError(error instanceof Error ? error.message : 'Impossibile importare il file ZIP.');
     } finally {
-      setIsImporting(false);
-      if (inputRef.current) inputRef.current.value = '';
+      if (mountedRef.current && operationId === operationRef.current) {
+        setIsImporting(false);
+        setIsDragging(false);
+        if (inputRef.current) inputRef.current.value = '';
+      }
     }
   };
 
@@ -53,6 +74,7 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     setIsDragging(false);
+    if (isImporting) return;
     const file = event.dataTransfer.files?.[0];
     if (file) void processFile(file);
   };
@@ -82,18 +104,19 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
         <div
           onDragOver={(event: React.DragEvent<HTMLDivElement>) => {
             event.preventDefault();
-            setIsDragging(true);
+            if (!isImporting) setIsDragging(true);
           }}
           onDragLeave={(event: React.DragEvent<HTMLDivElement>) => {
             event.preventDefault();
             setIsDragging(false);
           }}
           onDrop={handleDrop}
+          aria-busy={isImporting}
           className={`rounded-xl border border-dashed p-4 transition-colors ${
             isDragging
               ? 'border-indigo-400 bg-indigo-500/10'
               : 'border-slate-700 bg-slate-950/50 hover:border-slate-600'
-          }`}
+          } ${isImporting ? 'opacity-80' : ''}`}
         >
           <input
             ref={inputRef}
@@ -101,6 +124,7 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
             accept=".zip,application/zip,application/x-zip-compressed"
             className="hidden"
             onChange={handleFileChange}
+            disabled={isImporting}
             aria-label="Seleziona ZIP esportato da Instagram"
           />
 
@@ -109,7 +133,7 @@ export function ZipImportCard({ onImported, onError }: ZipImportCardProps) {
               <FileArchive size={22} className="text-slate-400 shrink-0" aria-hidden="true" />
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-slate-200">
-                  Trascina qui il file .zip oppure selezionalo
+                  {isImporting ? 'Analisi del file in corso…' : 'Trascina qui il file .zip oppure selezionalo'}
                 </p>
                 <p className="text-[11px] text-slate-500 mt-0.5">
                   Leggiamo solo i file follower/seguiti presenti nell&apos;archivio.
