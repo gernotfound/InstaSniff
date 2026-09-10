@@ -1,5 +1,3 @@
-import { ShieldCheck } from 'lucide-react';
-
 interface HeaderProps {
   isAnalyzed: boolean;
 }
@@ -17,21 +15,18 @@ export function Header({ isAnalyzed }: HeaderProps) {
           </span>
         </div>
         <p className="text-slate-400 text-xs sm:text-sm mt-1 max-w-2xl leading-relaxed">
-          Scopri chi non ricambia il follow senza login e senza API. Importa direttamente il ZIP ufficiale di Instagram oppure usa JSON, HTML, CSV e liste di username: l&apos;analisi avviene interamente nel browser.
+          Scopri chi non ricambia il follow senza login e senza API. Importa direttamente il ZIP ufficiale di Instagram oppure usa JSON, HTML, CSV e liste di username.
         </p>
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 bg-slate-900 px-3.5 py-2 rounded-xl border border-slate-800 text-xs font-mono">
-          <div
-            className={`w-2 h-2 rounded-full ${isAnalyzed ? 'bg-indigo-400' : 'bg-emerald-400'}`}
-            aria-hidden="true"
-          />
-          <span className="uppercase tracking-wider text-slate-300 font-semibold flex items-center gap-1.5">
-            <ShieldCheck size={14} className="text-emerald-400" aria-hidden="true" />
-            {isAnalyzed ? 'Analisi pronta' : 'Dati solo locali'}
-          </span>
-        </div>
+      <div className="flex items-center gap-2 bg-slate-900 px-3.5 py-2 rounded-xl border border-slate-800 text-xs font-mono">
+        <span
+          className={`w-2 h-2 rounded-full ${isAnalyzed ? 'bg-indigo-400' : 'bg-slate-500'}`}
+          aria-hidden="true"
+        />
+        <span className="uppercase tracking-wider text-slate-300 font-semibold">
+          {isAnalyzed ? 'Analisi pronta' : 'Pronto'}
+        </span>
       </div>
     </header>
   );
