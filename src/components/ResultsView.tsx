@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search,
   ExternalLink,
@@ -13,6 +13,7 @@ import {
   FileText,
   FileSpreadsheet,
   FileCode,
+  ChevronDown,
 } from 'lucide-react';
 import {
   AnalysisStats,
@@ -31,13 +32,19 @@ interface ResultsViewProps {
   showAsLinks?: boolean;
 }
 
+const INITIAL_RENDER_COUNT = 150;
+const RENDER_BATCH_SIZE = 250;
+
 export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsViewProps) {
   const [activeTab, setActiveTab] = useState<ActiveTab>('unfollowers');
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [sortOrder, setSortOrder] = useState<SortOrder>('default');
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [renderLimit, setRenderLimit] = useState(INITIAL_RENDER_COUNT);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const copyTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     setActiveTab('unfollowers');
@@ -45,7 +52,18 @@ export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsView
     setSortOrder('default');
     setCopyFeedback(false);
     setShowExportMenu(false);
+    setRenderLimit(INITIAL_RENDER_COUNT);
   }, [stats]);
+
+  useEffect(() => {
+    setRenderLimit(INITIAL_RENDER_COUNT);
+  }, [activeTab, deferredSearchQuery, sortOrder]);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!showExportMenu) return;
@@ -79,20 +97,21 @@ export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsView
 
   const filteredAndSortedList = useMemo(() => {
     let result = activeList;
+    const query = deferredSearchQuery.toLowerCase().trim();
 
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase().trim();
-      result = result.filter((user) => user.toLowerCase().includes(query));
-    }
-
-    if (sortOrder === 'asc') {
-      result = [...result].sort((a, b) => a.localeCompare(b));
-    } else if (sortOrder === 'desc') {
-      result = [...result].sort((a, b) => b.localeCompare(a));
-    }
+    if (query) result = result.filter((user) => user.includes(query));
+    if (sortOrder === 'asc') result = [...result].sort((a, b) => a.localeCompare(b));
+    else if (sortOrder === 'desc') result = [...result].sort((a, b) => b.localeCompare(a));
 
     return result;
-  }, [activeList, searchQuery, sortOrder]);
+  }, [activeList, deferredSearchQuery, sortOrder]);
+
+  const renderedList = useMemo(
+    () => filteredAndSortedList.slice(0, renderLimit),
+    [filteredAndSortedList, renderLimit]
+  );
+  const remainingCount = Math.max(0, filteredAndSortedList.length - renderedList.length);
+  const searchIsPending = searchQuery !== deferredSearchQuery;
 
   const handleCopyList = async () => {
     if (filteredAndSortedList.length === 0) return;
@@ -100,10 +119,14 @@ export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsView
       ? filteredAndSortedList.map((user) => `https://www.instagram.com/${user}`).join('\n')
       : filteredAndSortedList.join('\n');
     const success = await copyToClipboard(text);
-    if (success) {
-      setCopyFeedback(true);
-      window.setTimeout(() => setCopyFeedback(false), 2000);
-    }
+    if (!success) return;
+
+    setCopyFeedback(true);
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopyFeedback(false);
+      copyTimerRef.current = null;
+    }, 2000);
   };
 
   const handleExport = (format: 'txt' | 'csv' | 'json') => {
@@ -126,7 +149,7 @@ export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsView
         {
           tab: activeTab,
           generatedAt: new Date().toISOString(),
-          filter: searchQuery.trim() || null,
+          filter: deferredSearchQuery.trim() || null,
           sortOrder,
           stats: {
             following: stats.followingCount,
@@ -291,6 +314,10 @@ export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsView
             </button>
           </div>
 
+          {searchIsPending && (
+            <p className="text-[11px] text-slate-500 font-mono" aria-live="polite">Aggiornamento ricerca…</p>
+          )}
+
           <div
             id="relationship-results"
             role="tabpanel"
@@ -321,35 +348,49 @@ export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsView
               </div>
             ) : filteredAndSortedList.length === 0 ? (
               <div className="h-full min-h-[150px] flex flex-col items-center justify-center text-slate-400 text-xs font-mono text-center p-4">
-                <span>Nessun account corrisponde a &quot;{searchQuery}&quot;</span>
+                <span>Nessun account corrisponde a &quot;{deferredSearchQuery}&quot;</span>
               </div>
             ) : (
-              filteredAndSortedList.map((user) => (
-                <div
-                  key={user}
-                  className="group flex items-center justify-between bg-slate-950/70 p-2.5 px-3 rounded-xl border border-slate-800/80 hover:border-indigo-500/50 transition-colors"
-                >
-                  <div className="flex items-center gap-2 min-w-0 mr-2">
-                    <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" aria-hidden="true" />
-                    <span
-                      className="text-xs font-mono font-medium text-slate-200 truncate"
-                      title={showAsLinks ? `https://www.instagram.com/${user}` : `@${user}`}
-                    >
-                      {showAsLinks ? `https://www.instagram.com/${user}` : `@${user}`}
-                    </span>
-                  </div>
-
-                  <a
-                    href={`https://www.instagram.com/${encodeURIComponent(user)}/`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold hover:underline shrink-0 flex items-center gap-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 hover:border-indigo-500/40 transition-all focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
-                    aria-label={`Apri profilo Instagram di @${user} in una nuova scheda`}
+              <>
+                {renderedList.map((user) => (
+                  <div
+                    key={user}
+                    className="group flex items-center justify-between bg-slate-950/70 p-2.5 px-3 rounded-xl border border-slate-800/80 hover:border-indigo-500/50 transition-colors"
                   >
-                    Profilo <ExternalLink size={11} aria-hidden="true" />
-                  </a>
-                </div>
-              ))
+                    <div className="flex items-center gap-2 min-w-0 mr-2">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" aria-hidden="true" />
+                      <span
+                        className="text-xs font-mono font-medium text-slate-200 truncate"
+                        title={showAsLinks ? `https://www.instagram.com/${user}` : `@${user}`}
+                      >
+                        {showAsLinks ? `https://www.instagram.com/${user}` : `@${user}`}
+                      </span>
+                    </div>
+
+                    <a
+                      href={`https://www.instagram.com/${encodeURIComponent(user)}/`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-indigo-400 hover:text-indigo-300 font-bold hover:underline shrink-0 flex items-center gap-1 bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 hover:border-indigo-500/40 transition-all focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                      aria-label={`Apri profilo Instagram di @${user} in una nuova scheda`}
+                    >
+                      Profilo <ExternalLink size={11} aria-hidden="true" />
+                    </a>
+                  </div>
+                ))}
+
+                {remainingCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setRenderLimit((current) => current + RENDER_BATCH_SIZE)}
+                    className="sticky bottom-0 w-full py-2.5 rounded-xl bg-slate-800/95 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 flex items-center justify-center gap-2 backdrop-blur focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
+                    aria-label={`Mostra altri risultati. ${remainingCount} ancora nascosti`}
+                  >
+                    <ChevronDown size={14} aria-hidden="true" />
+                    Mostra altri {Math.min(RENDER_BATCH_SIZE, remainingCount)} · {remainingCount} rimanenti
+                  </button>
+                )}
+              </>
             )}
           </div>
 
@@ -358,7 +399,7 @@ export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsView
               <button
                 type="button"
                 onClick={handleCopyList}
-                disabled={filteredAndSortedList.length === 0}
+                disabled={filteredAndSortedList.length === 0 || searchIsPending}
                 className="w-full sm:flex-1 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-white p-2.5 rounded-xl text-xs font-bold tracking-wide flex items-center justify-center gap-2 transition-all border border-slate-700 disabled:border-slate-800 cursor-pointer disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
               >
                 {copyFeedback ? (
@@ -378,7 +419,7 @@ export function ResultsView({ stats, onReset, showAsLinks = false }: ResultsView
                 <button
                   type="button"
                   onClick={() => setShowExportMenu((current) => !current)}
-                  disabled={filteredAndSortedList.length === 0}
+                  disabled={filteredAndSortedList.length === 0 || searchIsPending}
                   className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white p-2.5 px-4 rounded-xl text-xs font-bold tracking-wide flex items-center justify-center gap-2 transition-all shadow-md shadow-indigo-600/20 border border-indigo-500/30 disabled:border-slate-700 cursor-pointer disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
                   aria-expanded={showExportMenu}
                   aria-haspopup="menu"
