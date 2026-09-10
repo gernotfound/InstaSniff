@@ -1,6 +1,0 @@
-{
-  "name": "InstaSniff",
-  "description": "Controlla chi non ricambia il follow su Instagram incollando le tue liste.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
