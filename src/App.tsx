@@ -1,12 +1,14 @@
-import { useState, useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { InputCard } from './components/InputCard';
 import { ResultsView } from './components/ResultsView';
 import { StatsCard } from './components/StatsCard';
+import { ZipImportCard } from './components/ZipImportCard';
 import { AlertBanner, AlertMessage } from './components/AlertBanner';
 import { parseInstagramText, computeAnalysis, AnalysisStats } from './utils';
-import { Search, Loader2 } from 'lucide-react';
+import { InstagramZipImportResult } from './instagramZip';
+import { Search, Loader2, Link2 } from 'lucide-react';
 
 export default function App() {
   const [followers, setFollowers] = useState('');
@@ -17,17 +19,56 @@ export default function App() {
   const [showAsLinks, setShowAsLinks] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
 
-  // Invalidate previous analysis when user edits input text
-  const handleFollowersChange = (val: string) => {
-    setFollowers(val);
+  const invalidateAnalysis = () => {
     if (stats) setStats(null);
     if (alert) setAlert(null);
   };
 
+  const handleFollowersChange = (val: string) => {
+    setFollowers(val);
+    invalidateAnalysis();
+  };
+
   const handleFollowingChange = (val: string) => {
     setFollowing(val);
-    if (stats) setStats(null);
-    if (alert) setAlert(null);
+    invalidateAnalysis();
+  };
+
+  const scrollToResultsOnSmallScreens = () => {
+    if (window.innerWidth < 1024 && resultsRef.current) {
+      requestAnimationFrame(() => {
+        resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  };
+
+  const handleZipImported = (result: InstagramZipImportResult, fileName: string) => {
+    const followerText = result.followers.join('\n');
+    const followingText = result.following.join('\n');
+    const calculatedStats = computeAnalysis(result.following, result.followers);
+
+    setFollowers(followerText);
+    setFollowing(followingText);
+    setStats(calculatedStats);
+    setShowAsLinks(false);
+
+    const filesRead = result.followerFiles.length + result.followingFiles.length;
+    const warningText = result.warnings.length > 0 ? ` ${result.warnings.join(' ')}` : '';
+    setAlert({
+      type: 'success',
+      title: 'ZIP Instagram importato',
+      message: `${fileName}: ${result.followers.length} follower e ${result.following.length} seguiti da ${filesRead} file dati. Analisi completata automaticamente.${warningText}`,
+    });
+
+    scrollToResultsOnSmallScreens();
+  };
+
+  const handleZipError = (message: string) => {
+    setAlert({
+      type: 'error',
+      title: 'Impossibile importare il ZIP',
+      message,
+    });
   };
 
   const handleProcess = () => {
@@ -47,8 +88,7 @@ export default function App() {
 
     setIsProcessing(true);
 
-    // Use requestAnimationFrame / timeout to prevent main-thread freezing on heavy exports
-    setTimeout(() => {
+    requestAnimationFrame(() => {
       try {
         const followersList = parseInstagramText(rawFollowers);
         const followingList = parseInstagramText(rawFollowing);
@@ -61,7 +101,6 @@ export default function App() {
               'Impossibile estrarre account Instagram validi da entrambe le liste. Assicurati di aver incollato username, URL o file di esportazione ufficiali (JSON/HTML/CSV).',
           });
           setStats(null);
-          setIsProcessing(false);
           return;
         }
 
@@ -73,7 +112,6 @@ export default function App() {
               'Non è stato trovato alcun account valido nella lista dei tuoi Follower. Controlla il formato dei dati incollati.',
           });
           setStats(null);
-          setIsProcessing(false);
           return;
         }
 
@@ -85,18 +123,12 @@ export default function App() {
               'Non è stato trovato alcun account valido nella lista delle persone che Segui. Controlla il formato dei dati incollati.',
           });
           setStats(null);
-          setIsProcessing(false);
           return;
         }
 
-        const calculatedStats = computeAnalysis(followingList, followersList);
-        setStats(calculatedStats);
+        setStats(computeAnalysis(followingList, followersList));
         setAlert(null);
-
-        // Smooth scroll to results on mobile/tablet viewports
-        if (window.innerWidth < 1024 && resultsRef.current) {
-          resultsRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+        scrollToResultsOnSmallScreens();
       } catch (err) {
         setAlert({
           type: 'error',
@@ -106,7 +138,7 @@ export default function App() {
       } finally {
         setIsProcessing(false);
       }
-    }, 50);
+    });
   };
 
   const handleReset = () => {
@@ -114,6 +146,7 @@ export default function App() {
     setFollowing('');
     setStats(null);
     setAlert(null);
+    setShowAsLinks(false);
   };
 
   const isFormIncomplete = !followers.trim() || !following.trim();
@@ -127,8 +160,15 @@ export default function App() {
       {stats && <StatsCard stats={stats} />}
 
       <main className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-grow">
-        {/* Left Side: Input Section & Action Button */}
         <div className="lg:col-span-7 flex flex-col gap-4">
+          <ZipImportCard onImported={handleZipImported} onError={handleZipError} />
+
+          <div className="flex items-center gap-3 text-[11px] uppercase tracking-wider font-bold text-slate-500" aria-hidden="true">
+            <span className="h-px bg-slate-800 flex-1" />
+            oppure inserisci i dati manualmente
+            <span className="h-px bg-slate-800 flex-1" />
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <InputCard
               title="I tuoi Follower"
@@ -143,7 +183,6 @@ export default function App() {
               value={following}
               onChange={handleFollowingChange}
             />
-
           </div>
 
           <button
@@ -155,32 +194,35 @@ export default function App() {
                 ? 'bg-slate-800 text-slate-500 border-slate-700/50 cursor-not-allowed shadow-none'
                 : 'bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 active:scale-[0.99] text-white border-indigo-500/30 shadow-indigo-600/20'
             }`}
-            aria-label="Avvia scansione e trova chi non ricambia il follow"
+            aria-label="Avvia confronto e trova chi non ricambia il follow"
           >
             {isProcessing ? (
               <>
-                <Loader2 size={18} className="animate-spin" />
+                <Loader2 size={18} className="animate-spin" aria-hidden="true" />
                 Elaborazione in corso...
               </>
             ) : (
               <>
-                <Search size={18} />
+                <Search size={18} aria-hidden="true" />
                 Trova chi non ti segue
               </>
             )}
           </button>
-          
-          <button
-            type="button"
-            onClick={() => setShowAsLinks(!showAsLinks)}
-            className="w-full py-3 px-6 rounded-2xl text-xs font-bold tracking-wide transition-all shadow-md border cursor-pointer focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700 uppercase"
-          >
-            {showAsLinks ? 'MOSTRA SOLO NOMI' : 'CREA LINK AI PROFILI'}
-          </button>
+
+          {stats && (
+            <button
+              type="button"
+              onClick={() => setShowAsLinks((current) => !current)}
+              aria-pressed={showAsLinks}
+              className="w-full py-3 px-6 rounded-2xl text-xs font-bold tracking-wide transition-all shadow-md border cursor-pointer focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700 uppercase flex items-center justify-center gap-2"
+            >
+              <Link2 size={15} aria-hidden="true" />
+              {showAsLinks ? 'Mostra username' : 'Mostra link ai profili'}
+            </button>
+          )}
         </div>
 
-        {/* Right Side: Results Section */}
-        <div ref={resultsRef} className="lg:col-span-5 flex flex-col min-h-0">
+        <div ref={resultsRef} className="lg:col-span-5 flex flex-col min-h-0 scroll-mt-4">
           <ResultsView stats={stats} onReset={handleReset} showAsLinks={showAsLinks} />
         </div>
       </main>
