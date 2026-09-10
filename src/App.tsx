@@ -9,7 +9,7 @@ import { PrivacyBanner } from './components/PrivacyBanner';
 import { AlertBanner, AlertMessage } from './components/AlertBanner';
 import { AnalysisStats } from './utils';
 import { analyzeManualLists, type ProcessedInstagramZipResult } from './processingClient';
-import { Search, Loader2, Link2 } from 'lucide-react';
+import { Search, Loader2 } from 'lucide-react';
 
 export default function App() {
   const [followers, setFollowers] = useState('');
@@ -17,7 +17,6 @@ export default function App() {
   const [stats, setStats] = useState<AnalysisStats | null>(null);
   const [alert, setAlert] = useState<AlertMessage | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [showAsLinks, setShowAsLinks] = useState(false);
   const [zipImported, setZipImported] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
   const analysisJobRef = useRef<{ cancel: () => void } | null>(null);
@@ -69,7 +68,6 @@ export default function App() {
     setFollowers('');
     setFollowing('');
     setStats(result.stats);
-    setShowAsLinks(false);
     setZipImported(true);
     setAlert(null);
     scrollToResultsOnSmallScreens();
@@ -169,7 +167,6 @@ export default function App() {
     setFollowing('');
     setStats(null);
     setAlert(null);
-    setShowAsLinks(false);
     setZipImported(false);
   };
 
@@ -238,26 +235,14 @@ export default function App() {
                 </button>
               </>
             )}
-
-            {stats && (
-              <button
-                type="button"
-                onClick={() => setShowAsLinks((current) => !current)}
-                aria-pressed={showAsLinks}
-                className="w-full py-3 px-6 rounded-2xl text-xs font-bold tracking-wide transition-all shadow-md border cursor-pointer focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700 uppercase flex items-center justify-center gap-2"
-              >
-                <Link2 size={15} aria-hidden="true" />
-                {showAsLinks ? 'Mostra username' : 'Mostra link ai profili'}
-              </button>
-            )}
           </div>
 
           <div ref={resultsRef} className="lg:col-span-5 flex flex-col min-h-0 scroll-mt-4">
-            <ResultsView stats={stats} onReset={handleReset} showAsLinks={showAsLinks} />
+            <ResultsView stats={stats} onReset={handleReset} />
           </div>
         </main>
 
-        <Footer isAnalyzed={stats !== null} />
+        <Footer />
       </div>
 
       <PrivacyBanner />
