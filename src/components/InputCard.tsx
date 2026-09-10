@@ -10,10 +10,15 @@ interface InputCardProps {
 }
 
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024;
+const MAX_TEXT_CHARS = 12_000_000;
 const LIVE_COUNT_MAX_CHARS = 300_000;
+const ALLOWED_FILE_PATTERN = /\.(txt|html?|json|csv|tsv)$/i;
 
 export function InputCard({ title, description, value, onChange }: InputCardProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeReaderRef = useRef<FileReader | null>(null);
+  const fileOperationRef = useRef(0);
+  const pasteTimerRef = useRef<number | null>(null);
   const textareaId = useId();
   const fileInputId = useId();
   const [fileError, setFileError] = useState<string | null>(null);
@@ -21,28 +26,74 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
   const [isDragging, setIsDragging] = useState(false);
   const [parsedCount, setParsedCount] = useState<number | null>(0);
 
+  useEffect(() => {
+    return () => {
+      fileOperationRef.current += 1;
+      activeReaderRef.current?.abort();
+      if (pasteTimerRef.current !== null) window.clearTimeout(pasteTimerRef.current);
+    };
+  }, []);
+
+  const setBoundedValue = (nextValue: string): boolean => {
+    if (nextValue.length > MAX_TEXT_CHARS) {
+      setFileError(
+        'Il testo è troppo grande per l’inserimento manuale. Usa il caricamento ZIP: è più efficiente e riduce il rischio di bloccare il browser.'
+      );
+      return false;
+    }
+    onChange(nextValue);
+    return true;
+  };
+
   const processFileContent = (content: string) => {
-    const parsedUsernames = parseInstagramText(content);
-    onChange(parsedUsernames.length > 0 ? parsedUsernames.join('\n') : content);
+    if (content.length > MAX_TEXT_CHARS) {
+      setFileError('Il contenuto del file è troppo grande per l’import manuale. Usa il caricamento ZIP qui sopra.');
+      return;
+    }
+
+    try {
+      const parsedUsernames = parseInstagramText(content);
+      setBoundedValue(parsedUsernames.length > 0 ? parsedUsernames.join('\n') : content);
+      setFileError(null);
+    } catch {
+      setFileError('Il file contiene una struttura troppo complessa o non leggibile. Prova con l’export ZIP originale di Instagram.');
+    }
   };
 
   const readFile = (file: File) => {
     setFileError(null);
 
+    if (!ALLOWED_FILE_PATTERN.test(file.name)) {
+      setFileError('Formato non supportato. Usa TXT, HTML, JSON, CSV o TSV; per l’archivio completo usa il caricamento ZIP.');
+      return;
+    }
     if (file.size > MAX_FILE_SIZE_BYTES) {
       setFileError('Il file supera la dimensione massima consentita di 15 MB. Per gli export completi usa il caricamento ZIP qui sopra.');
       return;
     }
 
+    activeReaderRef.current?.abort();
+    const operationId = fileOperationRef.current + 1;
+    fileOperationRef.current = operationId;
     const reader = new FileReader();
+    activeReaderRef.current = reader;
+
     reader.onload = (event) => {
+      if (operationId !== fileOperationRef.current) return;
+      activeReaderRef.current = null;
       if (typeof event.target?.result === 'string') {
         processFileContent(event.target.result);
-        setFileError(null);
+      } else {
+        setFileError('Il browser non ha restituito il file come testo leggibile.');
       }
     };
     reader.onerror = () => {
+      if (operationId !== fileOperationRef.current) return;
+      activeReaderRef.current = null;
       setFileError('Impossibile leggere il file selezionato. Riprova con un altro formato.');
+    };
+    reader.onabort = () => {
+      if (operationId === fileOperationRef.current) activeReaderRef.current = null;
     };
     reader.readAsText(file);
   };
@@ -62,25 +113,43 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
 
   const handlePasteFromClipboard = async () => {
     try {
+      if (!navigator.clipboard?.readText) throw new Error('Clipboard API unavailable');
       const text = await navigator.clipboard.readText();
-      if (text) {
-        onChange(value ? `${value}\n${text}` : text);
-        setPasteSuccess(true);
-        window.setTimeout(() => setPasteSuccess(false), 2000);
-      }
+      if (!text) return;
+
+      const nextValue = value ? `${value}\n${text}` : text;
+      if (!setBoundedValue(nextValue)) return;
+
+      setFileError(null);
+      setPasteSuccess(true);
+      if (pasteTimerRef.current !== null) window.clearTimeout(pasteTimerRef.current);
+      pasteTimerRef.current = window.setTimeout(() => {
+        setPasteSuccess(false);
+        pasteTimerRef.current = null;
+      }, 2000);
     } catch {
       setFileError('Il browser non ha consentito l’accesso agli appunti. Puoi incollare direttamente nel campo di testo.');
     }
   };
 
   const handleClear = () => {
+    fileOperationRef.current += 1;
+    activeReaderRef.current?.abort();
+    activeReaderRef.current = null;
     onChange('');
     setFileError(null);
+    setPasteSuccess(false);
   };
 
   const lineCount = useMemo(() => {
     if (!value.trim()) return 0;
-    return value.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+    if (value.length > LIVE_COUNT_MAX_CHARS) return null;
+
+    let count = 1;
+    for (let i = 0; i < value.length; i += 1) {
+      if (value.charCodeAt(i) === 10) count += 1;
+    }
+    return count;
   }, [value]);
 
   useEffect(() => {
@@ -95,7 +164,11 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
     }
 
     const timer = window.setTimeout(() => {
-      setParsedCount(parseInstagramText(value).length);
+      try {
+        setParsedCount(parseInstagramText(value).length);
+      } catch {
+        setParsedCount(null);
+      }
     }, 300);
 
     return () => window.clearTimeout(timer);
@@ -135,7 +208,7 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
             title="Incolla dagli appunti"
             aria-label="Incolla dagli appunti"
           >
-            {pasteSuccess ? <CheckCircle2 size={14} className="text-green-400" /> : <Clipboard size={14} />}
+            {pasteSuccess ? <CheckCircle2 size={14} className="text-green-400" aria-hidden="true" /> : <Clipboard size={14} aria-hidden="true" />}
             <span className="hidden sm:inline text-[11px] font-medium">Incolla</span>
           </button>
 
@@ -147,7 +220,7 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
               title="Pulisci testo"
               aria-label={`Pulisci ${title}`}
             >
-              <Trash2 size={14} />
+              <Trash2 size={14} aria-hidden="true" />
               <span className="hidden sm:inline text-[11px] font-medium">Pulisci</span>
             </button>
           )}
@@ -158,7 +231,9 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
         id={textareaId}
         className="flex-grow min-h-[220px] bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-xs text-slate-300 resize-y outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:border-transparent custom-scrollbar leading-relaxed"
         value={value}
-        onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => onChange(event.target.value)}
+        onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) => {
+          if (setBoundedValue(event.target.value)) setFileError(null);
+        }}
         aria-label={title}
         spellCheck={false}
         placeholder="@username oppure contenuto JSON / HTML / CSV"
@@ -166,14 +241,14 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
 
       {fileError && (
         <div role="alert" className="flex items-start gap-2 text-xs text-red-400 bg-red-950/40 border border-red-800/40 p-2.5 rounded-lg">
-          <AlertCircle size={14} className="shrink-0 mt-0.5" />
+          <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
           <span>{fileError}</span>
         </div>
       )}
 
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 text-xs text-slate-400 font-mono mt-1">
         <div className="flex items-center gap-2 min-w-0">
-          <span>{lineCount} righe</span>
+          <span>{lineCount === null ? 'molte righe' : `${lineCount} righe`}</span>
           <span className="text-slate-600">•</span>
           {parsedCount === null ? (
             <span className="text-slate-500">conteggio al momento dell&apos;analisi</span>
@@ -198,7 +273,7 @@ export function InputCard({ title, description, value, onChange }: InputCardProp
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-lg transition-colors uppercase tracking-wider text-xs font-semibold focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:outline-none"
           >
-            <Upload size={14} />
+            <Upload size={14} aria-hidden="true" />
             Carica file
           </button>
         </div>
