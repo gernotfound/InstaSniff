@@ -24,6 +24,13 @@ interface ZipDirectoryLocation {
   entryCount: number;
 }
 
+interface RelationshipEntryGroups {
+  followersJson: ZipEntry[];
+  followersHtml: ZipEntry[];
+  followingJson: ZipEntry[];
+  followingHtml: ZipEntry[];
+}
+
 const EOCD_SIGNATURE = 0x06054b50;
 const ZIP64_EOCD_SIGNATURE = 0x06064b50;
 const ZIP64_LOCATOR_SIGNATURE = 0x07064b50;
@@ -32,7 +39,7 @@ const LOCAL_FILE_SIGNATURE = 0x04034b50;
 const CENTRAL_DIGITAL_SIGNATURE = 0x05054b50;
 const MAX_EOCD_SEARCH_BYTES = 22 + 65_535;
 const MAX_CENTRAL_DIRECTORY_BYTES = 64 * 1024 * 1024;
-const MAX_ZIP_ENTRIES = 100_000;
+const MAX_ZIP_ENTRIES = 1_000_000;
 const MAX_RELATIONSHIP_FILES = 1_000;
 const MAX_RELATIONSHIP_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_TOTAL_RELATIONSHIP_BYTES = 96 * 1024 * 1024;
@@ -110,9 +117,7 @@ async function readZipDirectoryLocation(file: File): Promise<ZipDirectoryLocatio
 
   const locatorIndex = eocdIndex - 20;
   if (locatorIndex < 0 || view.getUint32(locatorIndex, true) !== ZIP64_LOCATOR_SIGNATURE) {
-    throw new Error(
-      'Questo archivio usa ZIP64 ma non contiene un indice leggibile. Prova a richiedere da Instagram solo “Follower e seguiti”.'
-    );
+    throw new Error('Questo archivio usa ZIP64 ma non contiene un indice leggibile.');
   }
 
   const zip64Disk = view.getUint32(locatorIndex + 4, true);
@@ -185,16 +190,41 @@ function parseZip64Extra(
   return {};
 }
 
-async function listZipEntries(file: File): Promise<ZipEntry[]> {
+function getBaseName(path: string): string {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  return normalized.split('/').pop() ?? normalized;
+}
+
+function relationshipPartNumber(name: string): number {
+  const match = getBaseName(name).match(/^(?:followers|following)_(\d+)\./);
+  return match ? Number(match[1]) : 0;
+}
+
+function classifyRelationshipEntry(name: string): keyof RelationshipEntryGroups | null {
+  const baseName = getBaseName(name);
+  if (/^followers(?:_\d+)?\.json$/.test(baseName)) return 'followersJson';
+  if (/^followers(?:_\d+)?\.html?$/.test(baseName)) return 'followersHtml';
+  if (/^following(?:_\d+)?\.json$/.test(baseName)) return 'followingJson';
+  if (/^following(?:_\d+)?\.html?$/.test(baseName)) return 'followingHtml';
+  return null;
+}
+
+function selectPreferredEntries(jsonEntries: ZipEntry[], htmlEntries: ZipEntry[]): ZipEntry[] {
+  const selected = jsonEntries.length > 0 ? jsonEntries : htmlEntries;
+  return [...selected].sort((a, b) => relationshipPartNumber(a.name) - relationshipPartNumber(b.name));
+}
+
+async function findRelationshipEntries(file: File): Promise<{
+  followerEntries: ZipEntry[];
+  followingEntries: ZipEntry[];
+}> {
   const { centralDirectoryOffset, centralDirectorySize, entryCount } = await readZipDirectoryLocation(file);
 
   if (entryCount > MAX_ZIP_ENTRIES) {
-    throw new Error(`Il ZIP contiene troppi file (${entryCount}). Esporta da Instagram solo “Follower e seguiti”.`);
+    throw new Error(`Il ZIP contiene un numero anomalo di file (${entryCount}) e non verrà elaborato.`);
   }
   if (centralDirectorySize > MAX_CENTRAL_DIRECTORY_BYTES) {
-    throw new Error(
-      'L’indice del ZIP è troppo grande. Per InstaSniff esporta da Instagram solo “Follower e seguiti”, intervallo completo, formato JSON.'
-    );
+    throw new Error('L’indice del ZIP è troppo grande per essere elaborato in sicurezza nel browser.');
   }
 
   assertSliceBounds(centralDirectoryOffset, centralDirectorySize, file.size, 'La directory centrale ZIP');
@@ -202,10 +232,17 @@ async function listZipEntries(file: File): Promise<ZipEntry[]> {
     await file.slice(centralDirectoryOffset, centralDirectoryOffset + centralDirectorySize).arrayBuffer()
   );
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const entries: ZipEntry[] = [];
-  let offset = 0;
+  const groups: RelationshipEntryGroups = {
+    followersJson: [],
+    followersHtml: [],
+    followingJson: [],
+    followingHtml: [],
+  };
 
-  while (entries.length < entryCount) {
+  let offset = 0;
+  let processedEntries = 0;
+
+  while (processedEntries < entryCount) {
     if (offset + 46 > bytes.byteLength || view.getUint32(offset, true) !== CENTRAL_FILE_SIGNATURE) {
       throw new Error('La directory del ZIP risulta troncata o danneggiata.');
     }
@@ -253,7 +290,15 @@ async function listZipEntries(file: File): Promise<ZipEntry[]> {
       throw new Error(`Offset ZIP non valido per ${name || 'un file'}.`);
     }
 
-    entries.push({ name, compressionMethod, flags, crc32, compressedSize, uncompressedSize, localHeaderOffset });
+    const group = classifyRelationshipEntry(name);
+    if (group) {
+      groups[group].push({ name, compressionMethod, flags, crc32, compressedSize, uncompressedSize, localHeaderOffset });
+      if (groups[group].length > MAX_RELATIONSHIP_FILES) {
+        throw new Error('Il ZIP contiene un numero anomalo di file follower/seguiti e non verrà elaborato.');
+      }
+    }
+
+    processedEntries += 1;
     offset = nextOffset;
   }
 
@@ -265,33 +310,10 @@ async function listZipEntries(file: File): Promise<ZipEntry[]> {
     }
   }
 
-  return entries;
-}
-
-function getBaseName(path: string): string {
-  const normalized = path.replace(/\\/g, '/').toLowerCase();
-  return normalized.split('/').pop() ?? normalized;
-}
-
-function relationshipPartNumber(name: string): number {
-  const match = getBaseName(name).match(/^(?:followers|following)_(\d+)\./);
-  return match ? Number(match[1]) : 0;
-}
-
-function chooseRelationshipEntries(entries: ZipEntry[], kind: 'followers' | 'following'): ZipEntry[] {
-  const jsonPattern = kind === 'followers' ? /^followers(?:_\d+)?\.json$/ : /^following(?:_\d+)?\.json$/;
-  const htmlPattern = kind === 'followers' ? /^followers(?:_\d+)?\.html?$/ : /^following(?:_\d+)?\.html?$/;
-
-  const jsonEntries = entries.filter((entry) => jsonPattern.test(getBaseName(entry.name)));
-  const selected = jsonEntries.length > 0
-    ? jsonEntries
-    : entries.filter((entry) => htmlPattern.test(getBaseName(entry.name)));
-
-  if (selected.length > MAX_RELATIONSHIP_FILES) {
-    throw new Error('Il ZIP contiene un numero anomalo di file follower/seguiti e non verrà elaborato.');
-  }
-
-  return [...selected].sort((a, b) => relationshipPartNumber(a.name) - relationshipPartNumber(b.name));
+  return {
+    followerEntries: selectPreferredEntries(groups.followersJson, groups.followersHtml),
+    followingEntries: selectPreferredEntries(groups.followingJson, groups.followingHtml),
+  };
 }
 
 const CRC32_TABLE = (() => {
@@ -426,9 +448,17 @@ async function readEntryText(file: File, entry: ZipEntry): Promise<string> {
   return decoder.decode(uncompressed).replace(/^\uFEFF/, '');
 }
 
+function extractInstagramProfileUsername(value: string): string | null {
+  const normalized = value.replace(/\\\//g, '/').trim();
+  const match = normalized.match(
+    /(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:_u\/)?([a-zA-Z0-9._]{1,30})(?=\/|[?#]|$)/i
+  );
+  return match?.[1] ? sanitizeUsername(match[1]) : null;
+}
+
 function addCandidate(value: unknown, result: Set<string>): void {
   if (typeof value !== 'string') return;
-  const username = sanitizeUsername(value);
+  const username = extractInstagramProfileUsername(value) ?? sanitizeUsername(value);
   if (username) result.add(username);
 }
 
@@ -470,7 +500,7 @@ function collectOfficialJsonUsernames(node: unknown, result: Set<string>): void 
 
 function collectLargeOfficialJsonByPattern(content: string, result: Set<string>): void {
   const directValuePattern = /"(?:value|title)"\s*:\s*"([a-zA-Z0-9._]{1,30})"/g;
-  const hrefPattern = /"href"\s*:\s*"(?:https?:\\?\/\\?\/)?(?:www\\?\.)?instagram\.com\\?\/([a-zA-Z0-9._]{1,30})/gi;
+  const hrefPattern = /"href"\s*:\s*"([^"]+)"/gi;
   let match: RegExpExecArray | null;
 
   while ((match = directValuePattern.exec(content)) !== null) addCandidate(match[1], result);
@@ -515,9 +545,7 @@ function validateSelectedEntries(entries: ZipEntry[]): void {
     }
     totalUncompressedBytes += entry.uncompressedSize;
     if (totalUncompressedBytes > MAX_TOTAL_RELATIONSHIP_BYTES) {
-      throw new Error(
-        'I file follower/seguiti nell’archivio sono troppo grandi nel complesso. Esporta solo “Follower e seguiti” oppure usa un computer con più memoria.'
-      );
+      throw new Error('I file follower/seguiti nell’archivio sono troppo grandi nel complesso.');
     }
   }
 }
@@ -535,9 +563,7 @@ export async function importInstagramZip(file: File): Promise<InstagramZipImport
   if (!file || file.size === 0) throw new Error('Seleziona un file ZIP non vuoto.');
   if (!file.name.toLowerCase().endsWith('.zip')) throw new Error('Seleziona il file .zip scaricato da Instagram/Meta.');
 
-  const entries = await listZipEntries(file);
-  const followerEntries = chooseRelationshipEntries(entries, 'followers');
-  const followingEntries = chooseRelationshipEntries(entries, 'following');
+  const { followerEntries, followingEntries } = await findRelationshipEntries(file);
 
   if (followerEntries.length === 0 || followingEntries.length === 0) {
     const missing = [
@@ -546,7 +572,7 @@ export async function importInstagramZip(file: File): Promise<InstagramZipImport
     ].filter(Boolean).join(' e ');
 
     throw new Error(
-      `Nel ZIP non trovo ${missing}. In Centro gestione account esporta “Follower e seguiti”, intervallo “Dall’inizio”, preferibilmente in JSON.`
+      `Nel ZIP non trovo ${missing}. In Centro gestione account esporta “Follower e seguiti”, intervallo “Dall’inizio”, in JSON o HTML.`
     );
   }
 
@@ -558,7 +584,7 @@ export async function importInstagramZip(file: File): Promise<InstagramZipImport
 
   const usingHtml = [...followerEntries, ...followingEntries].some((entry) => /\.html?$/i.test(entry.name));
   const warnings: string[] = [];
-  if (usingHtml) warnings.push('Export HTML rilevato: il formato JSON è consigliato perché più strutturato.');
+  if (usingHtml) warnings.push('Export HTML rilevato.');
   if (followerEntries.length > 1) warnings.push(`Uniti automaticamente ${followerEntries.length} file follower.`);
   if (followingEntries.length > 1) warnings.push(`Uniti automaticamente ${followingEntries.length} file seguiti.`);
   if (followers.length === 0) warnings.push('Il file follower è valido ma non contiene account.');
