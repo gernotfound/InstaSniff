@@ -42,6 +42,38 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Browser E2E tests
         run: npx playwright test
+      - name: Lighthouse CI audit
+        run: |
+          npm run preview -- --host 127.0.0.1 --port 4173 > /tmp/instasniff-preview.log 2>&1 &
+          PREVIEW_PID=$!
+          trap 'kill "$PREVIEW_PID" 2>/dev/null || true' EXIT
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/InstaSniff/ > /dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              cat /tmp/instasniff-preview.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          export CHROME_PATH="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser)"
+          npx --yes lighthouse@13.4.1 http://127.0.0.1:4173/InstaSniff/ \
+            --quiet \
+            --chrome-flags="--headless --no-sandbox --disable-dev-shm-usage" \
+            --only-categories=performance,accessibility,best-practices,seo \
+            --output=json \
+            --output-path=./lighthouse-report.json
+          node scripts/check-lighthouse.mjs lighthouse-report.json
+      - name: Upload Lighthouse report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-report
+          path: lighthouse-report.json
+          if-no-files-found: ignore
       - name: Setup Pages
         uses: actions/configure-pages@v4
       - name: Upload artifact
