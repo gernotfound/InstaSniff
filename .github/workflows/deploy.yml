@@ -36,6 +36,12 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+      - name: Install Playwright test runner
+        run: npm install --no-save --package-lock=false @playwright/test@1.55.0
+      - name: Install Chromium for E2E
+        run: npx playwright install --with-deps chromium
+      - name: Browser E2E tests
+        run: npx playwright test
       - name: Setup Pages
         uses: actions/configure-pages@v4
       - name: Upload artifact
