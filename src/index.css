@@ -9,6 +9,11 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* Keep secondary copy comfortably above WCAG AA contrast on the dark surfaces. */
+.text-slate-500 {
+  color: #94a3b8;
+}
+
 .custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: #334155 transparent;
