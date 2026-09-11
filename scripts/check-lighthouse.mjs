@@ -32,7 +32,8 @@ for (const category of categories) {
 
 for (const auditId of ['color-contrast', 'label-content-name-mismatch']) {
   const score = auditScore(auditId);
-  if (score !== 1) failures.push(`${auditId}: audit non superato (score ${String(score)})`);
+  // Lighthouse uses null for audits that are not applicable; that is not a failure.
+  if (score === 0) failures.push(`${auditId}: audit non superato`);
 }
 
 const totalBytes = auditValue('total-byte-weight');
