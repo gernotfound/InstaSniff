@@ -155,6 +155,22 @@ describe('extractOfficialInstagramUsernames', () => {
       'carlosdonpanino',
     ]);
   });
+
+  it('handles tens of thousands of official records without collecting unrelated names', () => {
+    const usernames = Array.from({ length: 25_000 }, (_, index) => `user_${index}`);
+    const content = JSON.stringify({
+      relationships_following: usernames.map((username) => relationship(username)),
+      unrelated: Array.from({ length: 1_000 }, (_, index) => ({ name: `noise_${index}` })),
+    });
+
+    const result = extractOfficialInstagramUsernames(content, 'following.json');
+
+    expect(result).toHaveLength(25_000);
+    expect(result[0]).toBe('user_0');
+    expect(result.at(-1)).toBe('user_24999');
+    expect(result).not.toContain('noise_0');
+    expect(result).not.toContain('noise_999');
+  });
 });
 
 describe('importInstagramZip', () => {
