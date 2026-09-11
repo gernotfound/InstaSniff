@@ -218,7 +218,6 @@ export default function App() {
                       ? 'bg-slate-800 text-slate-500 border-slate-700/50 cursor-not-allowed shadow-none'
                       : 'bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 active:scale-[0.99] text-white border-indigo-500/30 shadow-indigo-600/20'
                   }`}
-                  aria-label="Avvia confronto e trova chi non ricambia il follow"
                   aria-busy={isProcessing}
                 >
                   {isProcessing ? (
