@@ -123,6 +123,22 @@ async function importFixtureZip(page) {
   await expect(page.getByRole('heading', { name: 'Riepilogo Statistico' })).toBeVisible();
 }
 
+test('pagina iniziale mantiene i fix accessibility rilevati da Lighthouse', async ({ page }) => {
+  await page.goto('.');
+
+  const analyzeButton = page.getByRole('button', { name: 'Trova chi non ti segue', exact: true });
+  await expect(analyzeButton).toBeVisible();
+  await expect(analyzeButton).not.toHaveAttribute('aria-label');
+
+  const manualDivider = page.getByText('oppure inserisci i dati manualmente', { exact: true });
+  await expect(manualDivider).toHaveCSS('color', 'rgb(148, 163, 184)');
+
+  const accountCounters = page.getByText('0 account rilevati', { exact: true });
+  await expect(accountCounters).toHaveCount(2);
+  await expect(accountCounters.nth(0)).toHaveCSS('color', 'rgb(148, 163, 184)');
+  await expect(accountCounters.nth(1)).toHaveCSS('color', 'rgb(148, 163, 184)');
+});
+
 test('ZIP HTML reale con /_u/ produce conteggi corretti e nasconde gli input manuali', async ({ page }) => {
   await page.goto('.');
 
